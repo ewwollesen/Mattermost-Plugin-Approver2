@@ -1,6 +1,7 @@
 package command
 
 import (
+	"errors"
 	"fmt"
 	"strings"
 	"time"
@@ -14,6 +15,7 @@ import (
 type Storer interface {
 	GetAllApprovals() ([]*approval.ApprovalRecord, error)
 	GetUserApprovals(userID string) ([]*approval.ApprovalRecord, error)
+	GetApprovalByCode(code string) (*approval.ApprovalRecord, error)
 }
 
 // Router routes slash command invocations to appropriate handlers
@@ -56,6 +58,8 @@ func (r *Router) Route(args *model.CommandArgs) (*model.CommandResponse, error) 
 		return r.executeNew(args)
 	case "list":
 		return r.executeList(args)
+	case "get":
+		return r.executeGet(args)
 	case "status":
 		return r.executeStatus(args, split[2:])
 	default:
@@ -473,4 +477,119 @@ func getStatusIcon(status string) string {
 	default:
 		return status // Fallback
 	}
+}
+
+// executeGet retrieves and displays a specific approval record by code or ID
+func (r *Router) executeGet(args *model.CommandArgs) (*model.CommandResponse, error) {
+	// Parse command arguments
+	split := strings.Fields(args.Command)
+
+	// Check if code/ID parameter is provided (AC6: usage help)
+	if len(split) < 3 {
+		return &model.CommandResponse{
+			ResponseType: model.CommandResponseTypeEphemeral,
+			Text:         "Usage: /approve get <APPROVAL_ID>\n\nExample: /approve get A-X7K9Q2",
+		}, nil
+	}
+
+	code := split[2]
+
+	// Retrieve the approval record
+	record, err := r.store.GetApprovalByCode(code)
+	if err != nil {
+		// Check if error is ErrRecordNotFound (AC5: not found error)
+		if errors.Is(err, approval.ErrRecordNotFound) {
+			return &model.CommandResponse{
+				ResponseType: model.CommandResponseTypeEphemeral,
+				Text:         fmt.Sprintf("❌ Approval record '%s' not found.\n\nUse `/approve list` to see your approval records.", code),
+			}, nil
+		}
+
+		// Generic error handling
+		r.api.LogError("Failed to retrieve approval record",
+			"code", code,
+			"user_id", args.UserId,
+			"error", err.Error(),
+		)
+		return &model.CommandResponse{
+			ResponseType: model.CommandResponseTypeEphemeral,
+			Text:         "❌ Failed to retrieve approval record. Please try again.",
+		}, nil
+	}
+
+	// Access control check (AC4, AC7, AC8: verify user is requester or approver)
+	// Security: Only show records where authenticated user (args.UserId) is requester or approver (NFR-S2, FR37)
+	if record.RequesterID != args.UserId && record.ApproverID != args.UserId {
+		r.api.LogWarn("Unauthorized approval access attempt",
+			"user_id", args.UserId,
+			"record_id", record.ID,
+		)
+		return &model.CommandResponse{
+			ResponseType: model.CommandResponseTypeEphemeral,
+			Text:         "❌ Permission denied. You can only view approval records where you are the requester or approver.",
+		}, nil
+	}
+
+	// Format and return complete record details (AC3: display complete record)
+	responseText := formatRecordDetail(record)
+
+	return &model.CommandResponse{
+		ResponseType: model.CommandResponseTypeEphemeral,
+		Text:         responseText,
+	}, nil
+}
+
+// formatRecordDetail formats a complete approval record for display
+func formatRecordDetail(record *approval.ApprovalRecord) string {
+	var output strings.Builder
+
+	// Header with emoji and code (AC3)
+	output.WriteString(fmt.Sprintf("**📋 Approval Record: %s**\n\n", record.Code))
+
+	// Status with icon (AC3)
+	statusIcon := getStatusIcon(record.Status)
+	output.WriteString(fmt.Sprintf("**Status:** %s\n\n", statusIcon))
+
+	// Requester and Approver information (AC3)
+	output.WriteString(fmt.Sprintf("**Requester:** @%s (%s)\n", record.RequesterUsername, record.RequesterDisplayName))
+	output.WriteString(fmt.Sprintf("**Approver:** @%s (%s)\n\n", record.ApproverUsername, record.ApproverDisplayName))
+
+	// Description (AC3)
+	output.WriteString(fmt.Sprintf("**Description:**\n%s\n\n", record.Description))
+
+	// Timestamps (AC3)
+	// Format: YYYY-MM-DD HH:MM:SS UTC
+	createdTime := time.Unix(0, record.CreatedAt*int64(time.Millisecond))
+	formattedCreated := createdTime.UTC().Format("2006-01-02 15:04:05 MST")
+	output.WriteString(fmt.Sprintf("**Requested:** %s\n", formattedCreated))
+
+	// Decided timestamp (only if decided)
+	if record.DecidedAt > 0 {
+		decidedTime := time.Unix(0, record.DecidedAt*int64(time.Millisecond))
+		formattedDecided := decidedTime.UTC().Format("2006-01-02 15:04:05 MST")
+		output.WriteString(fmt.Sprintf("**Decided:** %s\n", formattedDecided))
+	} else {
+		output.WriteString("**Decided:** Not yet decided\n")
+	}
+
+	// Decision comment (only if present) (AC3)
+	if record.DecisionComment != "" {
+		output.WriteString(fmt.Sprintf("\n**Decision Comment:**\n%s\n", record.DecisionComment))
+	}
+
+	// Context section (AC3)
+	output.WriteString("\n**Context:**\n")
+	output.WriteString(fmt.Sprintf("- Request ID: %s\n", record.Code))
+	output.WriteString(fmt.Sprintf("- Full ID: %s\n", record.ID))
+	if record.RequestChannelID != "" {
+		output.WriteString(fmt.Sprintf("- Channel ID: %s\n", record.RequestChannelID))
+	}
+	if record.TeamID != "" {
+		output.WriteString(fmt.Sprintf("- Team ID: %s\n", record.TeamID))
+	}
+
+	// Footer: immutability statement (AC3)
+	output.WriteString("\n**This record is immutable and cannot be edited.**\n")
+
+	return output.String()
 }

@@ -94,6 +94,86 @@ func SendApprovalRequestDM(api plugin.API, botUserID string, record *approval.Ap
 	return createdPost.Id, nil
 }
 
+// SendOutcomeNotificationDM sends a DM notification to the requester when their approval request is decided.
+// The message includes complete context: approver info, decision time, original request, decision comment, and status.
+//
+// IMPORTANT: This function implements graceful degradation (Architecture Decision 2.2). The caller MUST NOT
+// fail the approval decision recording if this notification fails. Decision integrity is non-negotiable.
+//
+// Returns the post ID on success, or error if DM send fails (e.g., DM channel creation failure, CreatePost failure).
+// The caller should log errors at WARN level and continue - notification failures are best-effort only.
+func SendOutcomeNotificationDM(api plugin.API, botUserID string, record *approval.ApprovalRecord) (string, error) {
+	// Validate inputs
+	if botUserID == "" {
+		return "", fmt.Errorf("bot user ID not available")
+	}
+	if record == nil {
+		return "", fmt.Errorf("approval record is nil")
+	}
+	if record.ID == "" {
+		return "", fmt.Errorf("approval record ID is empty")
+	}
+
+	// Get or create DM channel between bot and requester
+	channelID, err := GetDMChannelID(api, botUserID, record.RequesterID)
+	if err != nil {
+		return "", fmt.Errorf("failed to get DM channel for requester %s: %w", record.RequesterID, err)
+	}
+
+	// Format decision timestamp as YYYY-MM-DD HH:MM:SS UTC
+	timestamp := time.UnixMilli(record.DecidedAt).UTC()
+	timestampStr := timestamp.Format("2006-01-02 15:04:05 MST")
+
+	// Determine header and status based on decision
+	var header, status string
+	switch record.Status {
+	case approval.StatusApproved:
+		header = "✅ **Approval Request Approved**"
+		status = "**Status:** You may proceed with this action."
+	case approval.StatusDenied:
+		header = "❌ **Approval Request Denied**"
+		status = "**Status:** This request has been denied."
+	default:
+		return "", fmt.Errorf("invalid status for outcome notification: %s", record.Status)
+	}
+
+	// Construct base message
+	message := fmt.Sprintf("%s\n\n"+
+		"**Approver:** @%s (%s)\n"+
+		"**Decision Time:** %s\n"+
+		"**Request ID:** `%s`\n\n"+
+		"**Original Request:**\n> %s",
+		header,
+		record.ApproverUsername,
+		record.ApproverDisplayName,
+		timestampStr,
+		record.Code,
+		record.Description)
+
+	// Add comment section if decision comment is present
+	if record.DecisionComment != "" {
+		message += fmt.Sprintf("\n\n**Comment:**\n%s", record.DecisionComment)
+	}
+
+	// Add status statement
+	message += fmt.Sprintf("\n\n%s", status)
+
+	// Create post (no interactive buttons for outcome notification)
+	post := &model.Post{
+		UserId:    botUserID,
+		ChannelId: channelID,
+		Message:   message,
+	}
+
+	// Send DM via CreatePost (persistent message, not ephemeral)
+	createdPost, appErr := api.CreatePost(post)
+	if appErr != nil {
+		return "", fmt.Errorf("failed to send outcome DM to requester %s: %w", record.RequesterID, appErr)
+	}
+
+	return createdPost.Id, nil
+}
+
 // GetDMChannelID gets or creates a DM channel between the bot and the target user.
 // Returns the channel ID if successful, or an error if the channel cannot be created.
 func GetDMChannelID(api plugin.API, botUserID, targetUserID string) (string, error) {

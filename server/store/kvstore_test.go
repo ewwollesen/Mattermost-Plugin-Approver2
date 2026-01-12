@@ -400,6 +400,145 @@ func TestMakeRecordKey(t *testing.T) {
 	assert.Equal(t, "approval:record:test123", key)
 }
 
+func TestKVStore_GetApprovalByCode(t *testing.T) {
+	t.Run("retrieves record by human-friendly code", func(t *testing.T) {
+		api := &plugintest.API{}
+		store := NewKVStore(api)
+
+		// Create test record
+		record := &approval.ApprovalRecord{
+			ID:                   "abc123def456ghi789jkl012",
+			Code:                 "A-X7K9Q2",
+			RequesterID:          "user1",
+			RequesterUsername:    "alice",
+			RequesterDisplayName: "Alice Carter",
+			ApproverID:           "user2",
+			ApproverUsername:     "bob",
+			ApproverDisplayName:  "Bob Smith",
+			Description:          "Test approval request",
+			Status:               approval.StatusPending,
+			CreatedAt:            1000,
+		}
+
+		// Mock code lookup: approval:code:A-X7K9Q2 → recordID
+		codeKey := "approval:code:A-X7K9Q2"
+		recordIDJSON, _ := json.Marshal(record.ID)
+		api.On("KVGet", codeKey).Return(recordIDJSON, nil).Once()
+
+		// Mock record retrieval: approval:record:{id} → full record
+		recordKey := fmt.Sprintf("approval:record:%s", record.ID)
+		recordJSON, _ := json.Marshal(record)
+		api.On("KVGet", recordKey).Return(recordJSON, nil).Once()
+
+		retrieved, err := store.GetApprovalByCode("A-X7K9Q2")
+		require.NoError(t, err)
+		require.NotNil(t, retrieved)
+		assert.Equal(t, record.ID, retrieved.ID)
+		assert.Equal(t, record.Code, retrieved.Code)
+		api.AssertExpectations(t)
+	})
+
+	t.Run("retrieves record by full 26-char ID", func(t *testing.T) {
+		api := &plugintest.API{}
+		store := NewKVStore(api)
+
+		fullID := "abcdefghijklmnopqrstuvwxyz" // Exactly 26 chars
+		record := &approval.ApprovalRecord{
+			ID:                   fullID,
+			Code:                 "A-X7K9Q2",
+			RequesterID:          "user1",
+			RequesterUsername:    "alice",
+			RequesterDisplayName: "Alice Carter",
+			Status:               approval.StatusApproved,
+			CreatedAt:            2000,
+		}
+
+		// Mock direct record retrieval (no code lookup)
+		recordKey := fmt.Sprintf("approval:record:%s", fullID)
+		recordJSON, _ := json.Marshal(record)
+		api.On("KVGet", recordKey).Return(recordJSON, nil).Once()
+
+		retrieved, err := store.GetApprovalByCode(fullID)
+		require.NoError(t, err)
+		require.NotNil(t, retrieved)
+		assert.Equal(t, fullID, retrieved.ID)
+		api.AssertExpectations(t)
+	})
+
+	t.Run("returns ErrRecordNotFound for non-existent code", func(t *testing.T) {
+		api := &plugintest.API{}
+		store := NewKVStore(api)
+
+		// Mock code lookup returns nil (not found)
+		api.On("KVGet", "approval:code:A-NOTFND").Return(nil, nil)
+
+		record, err := store.GetApprovalByCode("A-NOTFND")
+		assert.Error(t, err)
+		assert.Nil(t, record)
+		assert.True(t, errors.Is(err, approval.ErrRecordNotFound))
+		api.AssertExpectations(t)
+	})
+
+	t.Run("returns ErrRecordNotFound for non-existent full ID", func(t *testing.T) {
+		api := &plugintest.API{}
+		store := NewKVStore(api)
+
+		// Create exactly 26 char ID (no dashes)
+		fullID := "zy" + "xwvutsrqponmlkjihgfedcba"[:24] // Exactly 26 chars: zyxwvutsrqponmlkjihgfedc
+
+		// Mock direct record retrieval returns nil (not found)
+		recordKey := fmt.Sprintf("approval:record:%s", fullID)
+		api.On("KVGet", recordKey).Return(nil, nil)
+
+		record, err := store.GetApprovalByCode(fullID)
+		assert.Error(t, err)
+		assert.Nil(t, record)
+		assert.True(t, errors.Is(err, approval.ErrRecordNotFound))
+		api.AssertExpectations(t)
+	})
+
+	t.Run("returns error for empty code", func(t *testing.T) {
+		api := &plugintest.API{}
+		store := NewKVStore(api)
+
+		record, err := store.GetApprovalByCode("")
+		assert.Error(t, err)
+		assert.Nil(t, record)
+		assert.Contains(t, err.Error(), "required")
+	})
+
+	t.Run("returns error when KV store fails on code lookup", func(t *testing.T) {
+		api := &plugintest.API{}
+		store := NewKVStore(api)
+
+		appErr := model.NewAppError("test", "test.error", nil, "", 500)
+		api.On("KVGet", "approval:code:A-X7K9Q2").Return(nil, appErr)
+
+		record, err := store.GetApprovalByCode("A-X7K9Q2")
+		assert.Error(t, err)
+		assert.Nil(t, record)
+		api.AssertExpectations(t)
+	})
+
+	t.Run("returns error when KV store fails on record retrieval", func(t *testing.T) {
+		api := &plugintest.API{}
+		store := NewKVStore(api)
+
+		// Mock code lookup succeeds
+		recordIDJSON, _ := json.Marshal("record123")
+		api.On("KVGet", "approval:code:A-X7K9Q2").Return(recordIDJSON, nil)
+
+		// Mock record retrieval fails
+		appErr := model.NewAppError("test", "test.error", nil, "", 500)
+		api.On("KVGet", "approval:record:record123").Return(nil, appErr)
+
+		record, err := store.GetApprovalByCode("A-X7K9Q2")
+		assert.Error(t, err)
+		assert.Nil(t, record)
+		api.AssertExpectations(t)
+	})
+}
+
 func TestKVStore_GetUserApprovals(t *testing.T) {
 	t.Run("retrieves records where user is requester", func(t *testing.T) {
 		api := &plugintest.API{}

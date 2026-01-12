@@ -207,7 +207,7 @@ func TestCancelApproval(t *testing.T) {
 			}
 
 			// Create service
-			service := NewService(mockStore, mockAPI)
+			service := NewService(mockStore, mockAPI, "bot-user-id")
 
 			// Execute
 			err := service.CancelApproval(tt.approvalCode, tt.requesterID)
@@ -248,7 +248,7 @@ func TestCancelApproval_TimestampSet(t *testing.T) {
 		return r.DecidedAt > 0 && r.DecidedAt >= 1704931200000
 	})).Return(nil)
 
-	service := NewService(mockStore, mockAPI)
+	service := NewService(mockStore, mockAPI, "bot-user-id")
 	err := service.CancelApproval("A-X7K9Q2", "user123")
 
 	assert.NoError(t, err)
@@ -310,7 +310,7 @@ func TestCancelApproval_WhitespaceValidation(t *testing.T) {
 				mockStore.On("SaveApproval", mock.Anything).Return(nil)
 			}
 
-			service := NewService(mockStore, mockAPI)
+			service := NewService(mockStore, mockAPI, "bot-user-id")
 			err := service.CancelApproval(tt.code, tt.requesterID)
 
 			if tt.errContains != "" {
@@ -346,7 +346,7 @@ func TestCancelApproval_InvalidFormat(t *testing.T) {
 			mockStore := new(MockApprovalStore)
 			mockAPI := &plugintest.API{}
 
-			service := NewService(mockStore, mockAPI)
+			service := NewService(mockStore, mockAPI, "bot-user-id")
 			err := service.CancelApproval(tt.code, "user123")
 
 			assert.Error(t, err)
@@ -369,7 +369,7 @@ func TestCancelApproval_CorruptedIndex(t *testing.T) {
 	// Code index exists but points to deleted/non-existent record
 	mockStore.On("GetByCode", "A-X7K9Q2").Return(nil, fmt.Errorf("approval record deleted-id-123: %w", ErrRecordNotFound))
 
-	service := NewService(mockStore, mockAPI)
+	service := NewService(mockStore, mockAPI, "bot-user-id")
 	err := service.CancelApproval("A-X7K9Q2", "user123")
 
 	assert.Error(t, err)
@@ -378,4 +378,3 @@ func TestCancelApproval_CorruptedIndex(t *testing.T) {
 
 	mockStore.AssertExpectations(t)
 }
-

@@ -21,15 +21,17 @@ type ApprovalStore interface {
 
 // Service provides business logic for approval operations
 type Service struct {
-	store ApprovalStore
-	api   plugin.API
+	store     ApprovalStore
+	api       plugin.API
+	botUserID string
 }
 
 // NewService creates a new approval service
-func NewService(store ApprovalStore, api plugin.API) *Service {
+func NewService(store ApprovalStore, api plugin.API, botUserID string) *Service {
 	return &Service{
-		store: store,
-		api:   api,
+		store:     store,
+		api:       api,
+		botUserID: botUserID,
 	}
 }
 
@@ -94,28 +96,30 @@ func (s *Service) CancelApproval(approvalCode, requesterID string) error {
 // Performance: Completes within 2 seconds (NFR-P2). Timing is measured and logged.
 //
 // Returns:
-// - ErrRecordNotFound if approval doesn't exist
-// - ErrRecordImmutable if approval is not pending
-// - error with "permission denied" if approver doesn't match
-// - error for validation failures
-func (s *Service) RecordDecision(approvalID, approverID, decision, comment string) error {
+// - On success: (updated ApprovalRecord, nil) - caller should use record to send outcome notification
+// - On failure: (nil, error) where error is:
+//   - ErrRecordNotFound if approval doesn't exist
+//   - ErrRecordImmutable if approval is not pending
+//   - error with "permission denied" if approver doesn't match
+//   - error for validation failures (empty IDs, invalid decision value)
+func (s *Service) RecordDecision(approvalID, approverID, decision, comment string) (*ApprovalRecord, error) {
 	// Performance tracking (NFR-P2: must complete within 2 seconds)
 	startTime := model.GetMillis()
 
 	// Validation: trim whitespace and check required fields
 	approvalID = strings.TrimSpace(approvalID)
 	if approvalID == "" {
-		return fmt.Errorf("approval ID is required")
+		return nil, fmt.Errorf("approval ID is required")
 	}
 
 	approverID = strings.TrimSpace(approverID)
 	if approverID == "" {
-		return fmt.Errorf("approver ID is required")
+		return nil, fmt.Errorf("approver ID is required")
 	}
 
 	// Validate decision value
 	if decision != "approved" && decision != "denied" {
-		return fmt.Errorf("invalid decision: must be 'approved' or 'denied'")
+		return nil, fmt.Errorf("invalid decision: must be 'approved' or 'denied'")
 	}
 
 	// Trim comment (can be empty string)
@@ -125,12 +129,12 @@ func (s *Service) RecordDecision(approvalID, approverID, decision, comment strin
 	record, err := s.store.GetApproval(approvalID)
 	if err != nil {
 		// Wrap error with context (preserves ErrRecordNotFound if present)
-		return fmt.Errorf("failed to retrieve approval %s: %w", approvalID, err)
+		return nil, fmt.Errorf("failed to retrieve approval %s: %w", approvalID, err)
 	}
 
 	// Defensive nil check (should not happen with current KVStore implementation)
 	if record == nil {
-		return fmt.Errorf("approval record %s is nil after retrieval", approvalID)
+		return nil, fmt.Errorf("approval record %s is nil after retrieval", approvalID)
 	}
 
 	// Authorization check: verify authenticated user is the designated approver
@@ -140,7 +144,7 @@ func (s *Service) RecordDecision(approvalID, approverID, decision, comment strin
 			"authenticated_user", approverID,
 			"designated_approver", record.ApproverID,
 		)
-		return fmt.Errorf("permission denied: only the designated approver can make this decision")
+		return nil, fmt.Errorf("permission denied: only the designated approver can make this decision")
 	}
 
 	// Immutability check: only pending approvals can be decided
@@ -150,7 +154,7 @@ func (s *Service) RecordDecision(approvalID, approverID, decision, comment strin
 			"current_status", record.Status,
 			"attempted_action", decision,
 		)
-		return fmt.Errorf("cannot modify approval with status %s: %w", record.Status, ErrRecordImmutable)
+		return nil, fmt.Errorf("cannot modify approval with status %s: %w", record.Status, ErrRecordImmutable)
 	}
 
 	// Map decision string to status constant
@@ -170,7 +174,7 @@ func (s *Service) RecordDecision(approvalID, approverID, decision, comment strin
 	// KVStore re-checks status != pending before write (kvstore.go:33-40),
 	// providing protection against race conditions via optimistic locking
 	if err := s.store.SaveApproval(record); err != nil {
-		return fmt.Errorf("failed to save decision for approval %s: %w", approvalID, err)
+		return nil, fmt.Errorf("failed to save decision for approval %s: %w", approvalID, err)
 	}
 
 	// Calculate operation duration for performance monitoring (NFR-P2)
@@ -199,5 +203,6 @@ func (s *Service) RecordDecision(approvalID, approverID, decision, comment strin
 		)
 	}
 
-	return nil
+	// Return updated record for caller to send outcome notification
+	return record, nil
 }

@@ -33,6 +33,14 @@ func (m *mockStore) GetUserApprovals(userID string) ([]*approval.ApprovalRecord,
 	return args.Get(0).([]*approval.ApprovalRecord), args.Error(1)
 }
 
+func (m *mockStore) GetApprovalByCode(code string) (*approval.ApprovalRecord, error) {
+	args := m.Called(code)
+	if args.Get(0) == nil {
+		return nil, args.Error(1)
+	}
+	return args.Get(0).(*approval.ApprovalRecord), args.Error(1)
+}
+
 func TestRoute(t *testing.T) {
 	api := &plugintest.API{}
 	store := &mockStore{}
@@ -958,6 +966,373 @@ func TestExecuteList(t *testing.T) {
 		// Verify timestamp format: YYYY-MM-DD HH:MM
 		assert.Contains(t, resp.Text, "2024-01-10 14:30")
 
+		store.AssertExpectations(t)
+	})
+}
+
+func TestExecuteGet(t *testing.T) {
+	t.Run("successfully retrieves record by code", func(t *testing.T) {
+		api := &plugintest.API{}
+		store := &mockStore{}
+		router := NewRouter(api, store)
+
+		record := &approval.ApprovalRecord{
+			ID:                   "abc123def456ghi789jkl012",
+			Code:                 "A-X7K9Q2",
+			RequesterID:          "user1",
+			RequesterUsername:    "alice",
+			RequesterDisplayName: "Alice Carter",
+			ApproverID:           "user2",
+			ApproverUsername:     "bob",
+			ApproverDisplayName:  "Bob Smith",
+			Description:          "Emergency rollback of payment-config-v2 deployment",
+			Status:               approval.StatusApproved,
+			DecisionComment:      "Approved. Rollback immediately.",
+			CreatedAt:            1704897000000, // 2024-01-10 14:30:00 UTC
+			DecidedAt:            1704897300000, // 2024-01-10 14:35:00 UTC
+			RequestChannelID:     "channel123",
+			TeamID:               "team456",
+		}
+
+		store.On("GetApprovalByCode", "A-X7K9Q2").Return(record, nil)
+
+		args := &model.CommandArgs{
+			Command: "/approve get A-X7K9Q2",
+			UserId:  "user1", // Requester can view
+		}
+
+		resp, err := router.Route(args)
+		assert.NoError(t, err)
+		assert.NotNil(t, resp)
+		assert.Equal(t, model.CommandResponseTypeEphemeral, resp.ResponseType)
+
+		// Verify complete record details are shown
+		assert.Contains(t, resp.Text, "📋 Approval Record: A-X7K9Q2")
+		assert.Contains(t, resp.Text, "✅ Approved")
+		assert.Contains(t, resp.Text, "@alice")
+		assert.Contains(t, resp.Text, "Alice Carter")
+		assert.Contains(t, resp.Text, "@bob")
+		assert.Contains(t, resp.Text, "Bob Smith")
+		assert.Contains(t, resp.Text, "Emergency rollback of payment-config-v2 deployment")
+		assert.Contains(t, resp.Text, "Approved. Rollback immediately.")
+		assert.Contains(t, resp.Text, "2024-01-10 14:30:00 UTC")
+		assert.Contains(t, resp.Text, "2024-01-10 14:35:00 UTC")
+		assert.Contains(t, resp.Text, "immutable")
+
+		store.AssertExpectations(t)
+	})
+
+	t.Run("successfully retrieves record by full 26-char ID", func(t *testing.T) {
+		api := &plugintest.API{}
+		store := &mockStore{}
+		router := NewRouter(api, store)
+
+		fullID := "abcdefghijklmnopqrstuvwxyz" // Exactly 26 chars
+		record := &approval.ApprovalRecord{
+			ID:                   fullID,
+			Code:                 "A-X7K9Q2",
+			RequesterID:          "user1",
+			RequesterUsername:    "alice",
+			RequesterDisplayName: "Alice Carter",
+			ApproverID:           "user2",
+			Status:               approval.StatusPending,
+			Description:          "Test approval",
+			CreatedAt:            1704897000000,
+		}
+
+		store.On("GetApprovalByCode", fullID).Return(record, nil)
+
+		args := &model.CommandArgs{
+			Command: "/approve get " + fullID,
+			UserId:  "user1",
+		}
+
+		resp, err := router.Route(args)
+		assert.NoError(t, err)
+		assert.NotNil(t, resp)
+		assert.Contains(t, resp.Text, "📋 Approval Record: A-X7K9Q2")
+		assert.Contains(t, resp.Text, "⏳ Pending")
+
+		store.AssertExpectations(t)
+	})
+
+	t.Run("returns error when code not found", func(t *testing.T) {
+		api := &plugintest.API{}
+		store := &mockStore{}
+		router := NewRouter(api, store)
+
+		store.On("GetApprovalByCode", "A-NOTFND").Return(nil, fmt.Errorf("approval code A-NOTFND: %w", approval.ErrRecordNotFound))
+
+		args := &model.CommandArgs{
+			Command: "/approve get A-NOTFND",
+			UserId:  "user1",
+		}
+
+		resp, err := router.Route(args)
+		assert.NoError(t, err)
+		assert.NotNil(t, resp)
+		assert.Contains(t, resp.Text, "❌ Approval record 'A-NOTFND' not found")
+		assert.Contains(t, resp.Text, "/approve list")
+
+		store.AssertExpectations(t)
+	})
+
+	t.Run("returns usage help when code parameter missing", func(t *testing.T) {
+		api := &plugintest.API{}
+		store := &mockStore{}
+		router := NewRouter(api, store)
+
+		args := &model.CommandArgs{
+			Command: "/approve get",
+			UserId:  "user1",
+		}
+
+		resp, err := router.Route(args)
+		assert.NoError(t, err)
+		assert.NotNil(t, resp)
+		assert.Contains(t, resp.Text, "Usage: /approve get <APPROVAL_ID>")
+		assert.Contains(t, resp.Text, "Example: /approve get A-X7K9Q2")
+	})
+
+	t.Run("requester can view their own request", func(t *testing.T) {
+		api := &plugintest.API{}
+		store := &mockStore{}
+		router := NewRouter(api, store)
+
+		record := &approval.ApprovalRecord{
+			ID:                "record1",
+			Code:              "A-TEST1",
+			RequesterID:       "user1", // User is requester
+			RequesterUsername: "alice",
+			ApproverID:        "user2",
+			ApproverUsername:  "bob",
+			Status:            approval.StatusPending,
+			Description:       "Test",
+			CreatedAt:         1000,
+		}
+
+		store.On("GetApprovalByCode", "A-TEST1").Return(record, nil)
+
+		args := &model.CommandArgs{
+			Command: "/approve get A-TEST1",
+			UserId:  "user1", // Requester's user ID
+		}
+
+		resp, err := router.Route(args)
+		assert.NoError(t, err)
+		assert.NotNil(t, resp)
+		assert.Contains(t, resp.Text, "📋 Approval Record")
+		assert.Contains(t, resp.Text, "A-TEST1")
+
+		store.AssertExpectations(t)
+	})
+
+	t.Run("approver can view requests they approve", func(t *testing.T) {
+		api := &plugintest.API{}
+		store := &mockStore{}
+		router := NewRouter(api, store)
+
+		record := &approval.ApprovalRecord{
+			ID:                "record1",
+			Code:              "A-TEST1",
+			RequesterID:       "user1",
+			RequesterUsername: "alice",
+			ApproverID:        "user2", // User is approver
+			ApproverUsername:  "bob",
+			Status:            approval.StatusPending,
+			Description:       "Test",
+			CreatedAt:         1000,
+		}
+
+		store.On("GetApprovalByCode", "A-TEST1").Return(record, nil)
+
+		args := &model.CommandArgs{
+			Command: "/approve get A-TEST1",
+			UserId:  "user2", // Approver's user ID
+		}
+
+		resp, err := router.Route(args)
+		assert.NoError(t, err)
+		assert.NotNil(t, resp)
+		assert.Contains(t, resp.Text, "📋 Approval Record")
+		assert.Contains(t, resp.Text, "A-TEST1")
+
+		store.AssertExpectations(t)
+	})
+
+	t.Run("unauthorized user receives permission denied", func(t *testing.T) {
+		api := &plugintest.API{}
+		store := &mockStore{}
+		router := NewRouter(api, store)
+
+		record := &approval.ApprovalRecord{
+			ID:          "record1",
+			Code:        "A-TEST1",
+			RequesterID: "user1",
+			ApproverID:  "user2",
+			Status:      approval.StatusPending,
+			Description: "Sensitive data",
+			CreatedAt:   1000,
+		}
+
+		store.On("GetApprovalByCode", "A-TEST1").Return(record, nil)
+
+		// Mock LogWarn for unauthorized access attempt
+		api.On("LogWarn", mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything)
+
+		args := &model.CommandArgs{
+			Command: "/approve get A-TEST1",
+			UserId:  "user3", // Neither requester nor approver
+		}
+
+		resp, err := router.Route(args)
+		assert.NoError(t, err)
+		assert.NotNil(t, resp)
+		assert.Contains(t, resp.Text, "❌ Permission denied")
+		assert.Contains(t, resp.Text, "only view approval records where you are the requester or approver")
+		// Should not leak record details
+		assert.NotContains(t, resp.Text, "Sensitive data")
+		assert.NotContains(t, resp.Text, "A-TEST1")
+
+		api.AssertExpectations(t)
+		store.AssertExpectations(t)
+	})
+
+	t.Run("displays all status types with correct icons", func(t *testing.T) {
+		testCases := []struct {
+			status       string
+			expectedIcon string
+		}{
+			{approval.StatusApproved, "✅ Approved"},
+			{approval.StatusDenied, "❌ Denied"},
+			{approval.StatusPending, "⏳ Pending"},
+			{approval.StatusCanceled, "🚫 Canceled"},
+		}
+
+		for _, tc := range testCases {
+			t.Run(tc.status, func(t *testing.T) {
+				api := &plugintest.API{}
+				store := &mockStore{}
+				router := NewRouter(api, store)
+
+				record := &approval.ApprovalRecord{
+					ID:                "record1",
+					Code:              "A-TEST1",
+					RequesterID:       "user1",
+					RequesterUsername: "alice",
+					ApproverID:        "user2",
+					Status:            tc.status,
+					Description:       "Test",
+					CreatedAt:         1000,
+				}
+
+				store.On("GetApprovalByCode", "A-TEST1").Return(record, nil)
+
+				args := &model.CommandArgs{
+					Command: "/approve get A-TEST1",
+					UserId:  "user1",
+				}
+
+				resp, err := router.Route(args)
+				assert.NoError(t, err)
+				assert.NotNil(t, resp)
+				assert.Contains(t, resp.Text, tc.expectedIcon)
+
+				store.AssertExpectations(t)
+			})
+		}
+	})
+
+	t.Run("displays decision comment when present", func(t *testing.T) {
+		api := &plugintest.API{}
+		store := &mockStore{}
+		router := NewRouter(api, store)
+
+		record := &approval.ApprovalRecord{
+			ID:                "record1",
+			Code:              "A-TEST1",
+			RequesterID:       "user1",
+			RequesterUsername: "alice",
+			ApproverID:        "user2",
+			Status:            approval.StatusApproved,
+			Description:       "Test",
+			DecisionComment:   "Looks good to me",
+			CreatedAt:         1000,
+			DecidedAt:         2000,
+		}
+
+		store.On("GetApprovalByCode", "A-TEST1").Return(record, nil)
+
+		args := &model.CommandArgs{
+			Command: "/approve get A-TEST1",
+			UserId:  "user1",
+		}
+
+		resp, err := router.Route(args)
+		assert.NoError(t, err)
+		assert.NotNil(t, resp)
+		assert.Contains(t, resp.Text, "Decision Comment")
+		assert.Contains(t, resp.Text, "Looks good to me")
+
+		store.AssertExpectations(t)
+	})
+
+	t.Run("omits decision comment when not present", func(t *testing.T) {
+		api := &plugintest.API{}
+		store := &mockStore{}
+		router := NewRouter(api, store)
+
+		record := &approval.ApprovalRecord{
+			ID:                "record1",
+			Code:              "A-TEST1",
+			RequesterID:       "user1",
+			RequesterUsername: "alice",
+			ApproverID:        "user2",
+			Status:            approval.StatusPending,
+			Description:       "Test",
+			DecisionComment:   "", // No comment
+			CreatedAt:         1000,
+		}
+
+		store.On("GetApprovalByCode", "A-TEST1").Return(record, nil)
+
+		args := &model.CommandArgs{
+			Command: "/approve get A-TEST1",
+			UserId:  "user1",
+		}
+
+		resp, err := router.Route(args)
+		assert.NoError(t, err)
+		assert.NotNil(t, resp)
+		// Should not show decision comment section
+		assert.NotContains(t, resp.Text, "Decision Comment")
+
+		store.AssertExpectations(t)
+	})
+
+	t.Run("handles store error gracefully", func(t *testing.T) {
+		api := &plugintest.API{}
+		store := &mockStore{}
+		router := NewRouter(api, store)
+
+		storeErr := fmt.Errorf("KV store connection failed")
+		store.On("GetApprovalByCode", "A-TEST1").Return(nil, storeErr)
+
+		// Mock LogError for the failure
+		api.On("LogError", mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything)
+
+		args := &model.CommandArgs{
+			Command: "/approve get A-TEST1",
+			UserId:  "user1",
+		}
+
+		resp, err := router.Route(args)
+		assert.NoError(t, err)
+		assert.NotNil(t, resp)
+		assert.Contains(t, resp.Text, "❌ Failed to retrieve approval record")
+		assert.Contains(t, resp.Text, "try again")
+
+		api.AssertExpectations(t)
 		store.AssertExpectations(t)
 	})
 }

@@ -52,7 +52,7 @@ func (p *Plugin) OnActivate() error {
 	p.store = store.NewKVStore(p.API)
 
 	// Initialize approval service
-	p.service = approval.NewService(p.store, p.API)
+	p.service = approval.NewService(p.store, p.API, botID)
 
 	// Register slash command
 	if err := p.registerCommand(); err != nil {
@@ -69,7 +69,7 @@ func (p *Plugin) registerCommand() error {
 		Trigger:          "approve",
 		AutoComplete:     true,
 		AutoCompleteDesc: "Manage approval requests",
-		AutoCompleteHint: "[new|list|get|cancel|help]",
+		AutoCompleteHint: "[new|list|get|cancel|status|help]",
 		DisplayName:      "Approval Request",
 		Description:      "Create, manage, and view approval requests",
 	}
@@ -87,7 +87,7 @@ func (p *Plugin) ExecuteCommand(c *plugin.Context, args *model.CommandArgs) (*mo
 	split := strings.Fields(args.Command)
 	if len(split) < 2 {
 		// Use router for help/empty command
-		router := command.NewRouter(p.API)
+		router := command.NewRouter(p.API, p.store)
 		response, _ := router.Route(args)
 		return response, nil
 	}
@@ -100,7 +100,7 @@ func (p *Plugin) ExecuteCommand(c *plugin.Context, args *model.CommandArgs) (*mo
 	}
 
 	// For other commands, use the router
-	router := command.NewRouter(p.API)
+	router := command.NewRouter(p.API, p.store)
 	response, err := router.Route(args)
 	if err != nil {
 		p.API.LogError("Command execution failed", "error", err.Error(), "command", args.Command)

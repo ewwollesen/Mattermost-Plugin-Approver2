@@ -52,20 +52,20 @@ development_status:
   epic-1-retrospective: done
 
   # Epic 2: Approval Decision Processing
-  epic-2: in-progress
+  epic-2: done
   2-1-send-dm-notification-to-approver: done
   2-2-display-approval-request-with-interactive-buttons: done
   2-3-handle-approve-deny-button-interactions: done
   2-4-record-approval-decision-immutably: done
-  2-5-send-outcome-notification-to-requester: backlog
-  2-6-handle-notification-delivery-failures: backlog
+  2-5-send-outcome-notification-to-requester: done
+  2-6-handle-notification-delivery-failures: done
   epic-2-retrospective: optional
 
   # Epic 3: Approval History & Retrieval
-  epic-3: backlog
-  3-1-list-users-approval-requests: backlog
-  3-2-retrieve-specific-approval-by-reference-code: backlog
-  3-3-display-approval-records-in-readable-format: backlog
-  3-4-implement-index-strategy-for-fast-retrieval: backlog
-  3-5-enforce-access-control-on-retrieval: backlog
+  epic-3: done
+  3-1-list-users-approval-requests: done
+  3-2-retrieve-specific-approval-by-reference-code: done
+  3-3-display-approval-records-in-readable-format: done
+  3-4-implement-index-strategy-for-fast-retrieval: done  # Completed during Story 3.1 code review
+  3-5-enforce-access-control-on-retrieval: done
   epic-3-retrospective: optional

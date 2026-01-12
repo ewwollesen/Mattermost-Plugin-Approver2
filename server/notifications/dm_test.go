@@ -565,5 +565,388 @@ func TestSendApprovalRequestDM_WithActionButtons(t *testing.T) {
 	})
 }
 
+func TestSendOutcomeNotificationDM(t *testing.T) {
+	t.Run("successful approved notification", func(t *testing.T) {
+		// Setup mock API
+		api := &plugintest.API{}
+		botUserID := "bot123"
+		requesterID := "requester789"
+		dmChannelID := "dm456"
+
+		api.On("GetDirectChannel", botUserID, requesterID).Return(&model.Channel{Id: dmChannelID}, nil)
+		api.On("CreatePost", mock.MatchedBy(func(post *model.Post) bool {
+			return post.UserId == botUserID &&
+				post.ChannelId == dmChannelID &&
+				strings.Contains(post.Message, "✅ **Approval Request Approved**") &&
+				strings.Contains(post.Message, "@jordan (Jordan Lee)") &&
+				strings.Contains(post.Message, "You may proceed with this action")
+		})).Return(&model.Post{Id: "post_123"}, nil)
+
+		// Create test approval record (approved)
+		record := &approval.ApprovalRecord{
+			ID:                  "record123",
+			Code:                "A-X7K9Q2",
+			RequesterID:         requesterID,
+			ApproverUsername:    "jordan",
+			ApproverDisplayName: "Jordan Lee",
+			Description:         "Deploy hotfix to production",
+			Status:              approval.StatusApproved,
+			DecisionComment:     "Approved. Proceed immediately.",
+			DecidedAt:           1704988800000, // 2024-01-11 12:00:00 UTC
+		}
+
+		// Execute
+		postID, err := SendOutcomeNotificationDM(api, botUserID, record)
+
+		// Assert
+		assert.NoError(t, err)
+		assert.Equal(t, "post_123", postID)
+		api.AssertExpectations(t)
+	})
+
+	t.Run("successful denied notification with comment", func(t *testing.T) {
+		api := &plugintest.API{}
+		botUserID := "bot123"
+		requesterID := "requester789"
+		dmChannelID := "dm456"
+
+		api.On("GetDirectChannel", botUserID, requesterID).Return(&model.Channel{Id: dmChannelID}, nil)
+		api.On("CreatePost", mock.MatchedBy(func(post *model.Post) bool {
+			return post.UserId == botUserID &&
+				post.ChannelId == dmChannelID &&
+				strings.Contains(post.Message, "❌ **Approval Request Denied**") &&
+				strings.Contains(post.Message, "@jordan (Jordan Lee)") &&
+				strings.Contains(post.Message, "This request has been denied") &&
+				strings.Contains(post.Message, "Need VP approval for production changes")
+		})).Return(&model.Post{Id: "post_456"}, nil)
+
+		record := &approval.ApprovalRecord{
+			ID:                  "record456",
+			Code:                "A-ABC123",
+			RequesterID:         requesterID,
+			ApproverUsername:    "jordan",
+			ApproverDisplayName: "Jordan Lee",
+			Description:         "Deploy hotfix to production",
+			Status:              approval.StatusDenied,
+			DecisionComment:     "Need VP approval for production changes",
+			DecidedAt:           1704988800000,
+		}
+
+		postID, err := SendOutcomeNotificationDM(api, botUserID, record)
+
+		assert.NoError(t, err)
+		assert.Equal(t, "post_456", postID)
+		api.AssertExpectations(t)
+	})
+
+	t.Run("approved message format matches AC2 exactly", func(t *testing.T) {
+		api := &plugintest.API{}
+		botUserID := "bot123"
+		requesterID := "requester789"
+		dmChannelID := "dm456"
+
+		var capturedMessage string
+		api.On("GetDirectChannel", botUserID, requesterID).Return(&model.Channel{Id: dmChannelID}, nil)
+		api.On("CreatePost", mock.MatchedBy(func(post *model.Post) bool {
+			capturedMessage = post.Message
+			return true
+		})).Return(&model.Post{Id: "post_123"}, nil)
+
+		record := &approval.ApprovalRecord{
+			ID:                  "record123",
+			Code:                "A-X7K9Q2",
+			RequesterID:         requesterID,
+			ApproverUsername:    "jordan",
+			ApproverDisplayName: "Jordan Lee",
+			Description:         "Deploy hotfix to production",
+			Status:              approval.StatusApproved,
+			DecisionComment:     "Approved. Proceed immediately.",
+			DecidedAt:           1704988800000,
+		}
+
+		_, err := SendOutcomeNotificationDM(api, botUserID, record)
+		assert.NoError(t, err)
+
+		// Verify exact format from AC2
+		assert.Contains(t, capturedMessage, "✅ **Approval Request Approved**")
+		assert.Contains(t, capturedMessage, "**Approver:** @jordan (Jordan Lee)")
+		assert.Contains(t, capturedMessage, "**Decision Time:**")
+		assert.Contains(t, capturedMessage, "**Request ID:** `A-X7K9Q2`")
+		assert.Contains(t, capturedMessage, "**Original Request:**")
+		assert.Contains(t, capturedMessage, "> Deploy hotfix to production")
+		assert.Contains(t, capturedMessage, "**Comment:**")
+		assert.Contains(t, capturedMessage, "Approved. Proceed immediately.")
+		assert.Contains(t, capturedMessage, "**Status:** You may proceed with this action.")
+	})
+
+	t.Run("denied message format matches AC3 exactly", func(t *testing.T) {
+		api := &plugintest.API{}
+		botUserID := "bot123"
+		requesterID := "requester789"
+		dmChannelID := "dm456"
+
+		var capturedMessage string
+		api.On("GetDirectChannel", botUserID, requesterID).Return(&model.Channel{Id: dmChannelID}, nil)
+		api.On("CreatePost", mock.MatchedBy(func(post *model.Post) bool {
+			capturedMessage = post.Message
+			return true
+		})).Return(&model.Post{Id: "post_123"}, nil)
+
+		record := &approval.ApprovalRecord{
+			ID:                  "record456",
+			Code:                "A-ABC123",
+			RequesterID:         requesterID,
+			ApproverUsername:    "jordan",
+			ApproverDisplayName: "Jordan Lee",
+			Description:         "Deploy hotfix to production",
+			Status:              approval.StatusDenied,
+			DecisionComment:     "Need VP approval",
+			DecidedAt:           1704988800000,
+		}
+
+		_, err := SendOutcomeNotificationDM(api, botUserID, record)
+		assert.NoError(t, err)
+
+		// Verify exact format from AC3
+		assert.Contains(t, capturedMessage, "❌ **Approval Request Denied**")
+		assert.Contains(t, capturedMessage, "**Approver:** @jordan (Jordan Lee)")
+		assert.Contains(t, capturedMessage, "**Decision Time:**")
+		assert.Contains(t, capturedMessage, "**Request ID:** `A-ABC123`")
+		assert.Contains(t, capturedMessage, "**Original Request:**")
+		assert.Contains(t, capturedMessage, "> Deploy hotfix to production")
+		assert.Contains(t, capturedMessage, "**Comment:**")
+		assert.Contains(t, capturedMessage, "Need VP approval")
+		assert.Contains(t, capturedMessage, "**Status:** This request has been denied.")
+	})
+
+	t.Run("notification with empty comment omits comment section", func(t *testing.T) {
+		api := &plugintest.API{}
+		botUserID := "bot123"
+		requesterID := "requester789"
+		dmChannelID := "dm456"
+
+		var capturedMessage string
+		api.On("GetDirectChannel", botUserID, requesterID).Return(&model.Channel{Id: dmChannelID}, nil)
+		api.On("CreatePost", mock.MatchedBy(func(post *model.Post) bool {
+			capturedMessage = post.Message
+			return true
+		})).Return(&model.Post{Id: "post_123"}, nil)
+
+		record := &approval.ApprovalRecord{
+			ID:                  "record123",
+			Code:                "A-X7K9Q2",
+			RequesterID:         requesterID,
+			ApproverUsername:    "jordan",
+			ApproverDisplayName: "Jordan Lee",
+			Description:         "Deploy hotfix",
+			Status:              approval.StatusApproved,
+			DecisionComment:     "", // Empty comment
+			DecidedAt:           1704988800000,
+		}
+
+		_, err := SendOutcomeNotificationDM(api, botUserID, record)
+		assert.NoError(t, err)
+
+		// Verify comment section is omitted
+		assert.NotContains(t, capturedMessage, "**Comment:**")
+		// But still contains status
+		assert.Contains(t, capturedMessage, "**Status:** You may proceed")
+	})
+
+	t.Run("notification with long description formats correctly", func(t *testing.T) {
+		api := &plugintest.API{}
+		botUserID := "bot123"
+		requesterID := "requester789"
+		dmChannelID := "dm456"
+
+		var capturedMessage string
+		api.On("GetDirectChannel", botUserID, requesterID).Return(&model.Channel{Id: dmChannelID}, nil)
+		api.On("CreatePost", mock.MatchedBy(func(post *model.Post) bool {
+			capturedMessage = post.Message
+			return true
+		})).Return(&model.Post{Id: "post_123"}, nil)
+
+		longDescription := strings.Repeat("This is a very detailed description with multiple lines. ", 20)
+
+		record := &approval.ApprovalRecord{
+			ID:                  "record123",
+			Code:                "A-X7K9Q2",
+			RequesterID:         requesterID,
+			ApproverUsername:    "jordan",
+			ApproverDisplayName: "Jordan Lee",
+			Description:         longDescription,
+			Status:              approval.StatusApproved,
+			DecisionComment:     "Approved",
+			DecidedAt:           1704988800000,
+		}
+
+		_, err := SendOutcomeNotificationDM(api, botUserID, record)
+		assert.NoError(t, err)
+
+		// Verify description is quoted with >
+		assert.Contains(t, capturedMessage, "> "+longDescription)
+	})
+
+	t.Run("timestamp format is YYYY-MM-DD HH:MM:SS UTC", func(t *testing.T) {
+		api := &plugintest.API{}
+		botUserID := "bot123"
+		requesterID := "requester789"
+		dmChannelID := "dm456"
+
+		var capturedMessage string
+		api.On("GetDirectChannel", botUserID, requesterID).Return(&model.Channel{Id: dmChannelID}, nil)
+		api.On("CreatePost", mock.MatchedBy(func(post *model.Post) bool {
+			capturedMessage = post.Message
+			return true
+		})).Return(&model.Post{Id: "post_123"}, nil)
+
+		record := &approval.ApprovalRecord{
+			ID:                  "record123",
+			Code:                "A-X7K9Q2",
+			RequesterID:         requesterID,
+			ApproverUsername:    "jordan",
+			ApproverDisplayName: "Jordan Lee",
+			Description:         "Test",
+			Status:              approval.StatusApproved,
+			DecidedAt:           1704988800000, // 2024-01-11 12:00:00 UTC
+		}
+
+		_, err := SendOutcomeNotificationDM(api, botUserID, record)
+		assert.NoError(t, err)
+
+		// Verify timestamp format
+		expectedTime := time.UnixMilli(1704988800000).UTC()
+		expectedTimestamp := expectedTime.Format("2006-01-02 15:04:05 MST")
+		assert.Contains(t, capturedMessage, expectedTimestamp)
+	})
+
+	t.Run("DM channel creation failure", func(t *testing.T) {
+		api := &plugintest.API{}
+		botUserID := "bot123"
+		requesterID := "requester789"
+
+		api.On("GetDirectChannel", botUserID, requesterID).Return(nil, &model.AppError{Message: "DMs disabled"})
+
+		record := &approval.ApprovalRecord{
+			ID:                  "record123",
+			Code:                "A-X7K9Q2",
+			RequesterID:         requesterID,
+			ApproverUsername:    "jordan",
+			ApproverDisplayName: "Jordan Lee",
+			Description:         "Test",
+			Status:              approval.StatusApproved,
+			DecidedAt:           1704988800000,
+		}
+
+		_, err := SendOutcomeNotificationDM(api, botUserID, record)
+
+		assert.Error(t, err)
+		assert.Contains(t, err.Error(), "failed to get DM channel for requester")
+		api.AssertExpectations(t)
+	})
+
+	t.Run("CreatePost failure", func(t *testing.T) {
+		api := &plugintest.API{}
+		botUserID := "bot123"
+		requesterID := "requester789"
+		dmChannelID := "dm456"
+
+		api.On("GetDirectChannel", botUserID, requesterID).Return(&model.Channel{Id: dmChannelID}, nil)
+		api.On("CreatePost", mock.Anything).Return(nil, &model.AppError{Message: "network error"})
+
+		record := &approval.ApprovalRecord{
+			ID:                  "record123",
+			Code:                "A-X7K9Q2",
+			RequesterID:         requesterID,
+			ApproverUsername:    "jordan",
+			ApproverDisplayName: "Jordan Lee",
+			Description:         "Test",
+			Status:              approval.StatusApproved,
+			DecidedAt:           1704988800000,
+		}
+
+		_, err := SendOutcomeNotificationDM(api, botUserID, record)
+
+		assert.Error(t, err)
+		assert.Contains(t, err.Error(), "failed to send outcome DM to requester")
+		api.AssertExpectations(t)
+	})
+
+	t.Run("bot user ID not available", func(t *testing.T) {
+		api := &plugintest.API{}
+
+		record := &approval.ApprovalRecord{
+			ID:                  "record123",
+			Code:                "A-X7K9Q2",
+			RequesterID:         "requester789",
+			ApproverUsername:    "jordan",
+			ApproverDisplayName: "Jordan Lee",
+			Description:         "Test",
+			Status:              approval.StatusApproved,
+			DecidedAt:           1704988800000,
+		}
+
+		_, err := SendOutcomeNotificationDM(api, "", record)
+
+		assert.Error(t, err)
+		assert.Contains(t, err.Error(), "bot user ID not available")
+	})
+
+	t.Run("nil record validation", func(t *testing.T) {
+		api := &plugintest.API{}
+
+		_, err := SendOutcomeNotificationDM(api, "bot123", nil)
+
+		assert.Error(t, err)
+		assert.Contains(t, err.Error(), "approval record is nil")
+	})
+
+	t.Run("empty record ID validation", func(t *testing.T) {
+		api := &plugintest.API{}
+
+		record := &approval.ApprovalRecord{
+			ID:                  "", // Empty ID
+			Code:                "A-X7K9Q2",
+			RequesterID:         "requester789",
+			ApproverUsername:    "jordan",
+			ApproverDisplayName: "Jordan Lee",
+			Description:         "Test",
+			Status:              approval.StatusApproved,
+			DecidedAt:           1704988800000,
+		}
+
+		_, err := SendOutcomeNotificationDM(api, "bot123", record)
+
+		assert.Error(t, err)
+		assert.Contains(t, err.Error(), "approval record ID is empty")
+	})
+
+	t.Run("invalid status returns error", func(t *testing.T) {
+		api := &plugintest.API{}
+		botUserID := "bot123"
+		requesterID := "requester789"
+		dmChannelID := "dm456"
+
+		api.On("GetDirectChannel", botUserID, requesterID).Return(&model.Channel{Id: dmChannelID}, nil)
+
+		record := &approval.ApprovalRecord{
+			ID:                  "record123",
+			Code:                "A-X7K9Q2",
+			RequesterID:         requesterID,
+			ApproverUsername:    "jordan",
+			ApproverDisplayName: "Jordan Lee",
+			Description:         "Test",
+			Status:              approval.StatusPending, // Invalid for outcome notification
+			DecidedAt:           1704988800000,
+		}
+
+		_, err := SendOutcomeNotificationDM(api, botUserID, record)
+
+		assert.Error(t, err)
+		assert.Contains(t, err.Error(), "invalid status for outcome notification")
+		api.AssertExpectations(t)
+	})
+}
+
 // Helper function to verify the plugin.API interface is satisfied
 var _ plugin.API = (*plugintest.API)(nil)

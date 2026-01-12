@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"sort"
+	"strings"
 
 	"github.com/mattermost/mattermost-plugin-approver2/server/approval"
 	"github.com/mattermost/mattermost/server/public/plugin"
@@ -163,6 +164,42 @@ func (s *KVStore) GetByCode(code string) (*approval.ApprovalRecord, error) {
 	var recordID string
 	if err := json.Unmarshal(data, &recordID); err != nil {
 		return nil, fmt.Errorf("failed to unmarshal record ID for code %s: %w", code, err)
+	}
+
+	// Retrieve full record by ID
+	return s.GetApproval(recordID)
+}
+
+// GetApprovalByCode retrieves an ApprovalRecord by either human-friendly code or full 26-char ID
+// This method supports both code formats (e.g., "A-X7K9Q2") and full Mattermost IDs (26 chars)
+func (s *KVStore) GetApprovalByCode(codeOrID string) (*approval.ApprovalRecord, error) {
+	if codeOrID == "" {
+		return nil, fmt.Errorf("approval code or ID is required")
+	}
+
+	// Detect if input is a full 26-char ID (no dashes, exactly 26 characters)
+	// Mattermost IDs are 26 characters of alphanumeric characters
+	if len(codeOrID) == 26 && !strings.Contains(codeOrID, "-") {
+		// Direct lookup by full ID
+		return s.GetApproval(codeOrID)
+	}
+
+	// Otherwise, treat as human-friendly code and do code lookup
+	// Look up record ID from code index
+	codeKey := makeCodeKey(codeOrID)
+	data, appErr := s.api.KVGet(codeKey)
+	if appErr != nil {
+		return nil, fmt.Errorf("failed to lookup code %s: %w", codeOrID, appErr)
+	}
+
+	if data == nil {
+		return nil, fmt.Errorf("approval code %s: %w", codeOrID, approval.ErrRecordNotFound)
+	}
+
+	// Unmarshal record ID
+	var recordID string
+	if err := json.Unmarshal(data, &recordID); err != nil {
+		return nil, fmt.Errorf("failed to unmarshal record ID for code %s: %w", codeOrID, err)
 	}
 
 	// Retrieve full record by ID

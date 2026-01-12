@@ -212,6 +212,9 @@ func (p *Plugin) handleApproveNew(payload *model.SubmitDialogRequest) *model.Sub
 	// Story 2.1: Send DM notification to approver (best effort, graceful degradation)
 	postID, err := notifications.SendApprovalRequestDM(p.API, p.botUserID, record)
 	if err != nil {
+		// Story 2.6: Classify error and provide resolution suggestion (AC6)
+		errorType, suggestion := notifications.ClassifyDMError(err)
+
 		// Log warning but continue - approval record already saved (data integrity priority)
 		p.API.LogWarn("DM notification failed but approval created",
 			"approval_id", record.ID,
@@ -219,6 +222,8 @@ func (p *Plugin) handleApproveNew(payload *model.SubmitDialogRequest) *model.Sub
 			"approver_id", record.ApproverID,
 			"requester_id", record.RequesterID,
 			"error", err.Error(),
+			"error_type", errorType,
+			"suggestion", suggestion,
 		)
 		// NotificationSent flag remains false (default value)
 	} else {
@@ -482,7 +487,8 @@ func (p *Plugin) handleConfirmDecision(payload *model.SubmitDialogRequest) *mode
 		decision = "denied"
 	}
 
-	if err := p.service.RecordDecision(approvalID, approverID, decision, comment); err != nil {
+	updatedRecord, err := p.service.RecordDecision(approvalID, approverID, decision, comment)
+	if err != nil {
 		p.API.LogError("Failed to record decision",
 			"approval_id", approvalID,
 			"action", action,
@@ -490,6 +496,39 @@ func (p *Plugin) handleConfirmDecision(payload *model.SubmitDialogRequest) *mode
 		)
 		return &model.SubmitDialogResponse{
 			Error: "Failed to record decision. Please try again.",
+		}
+	}
+
+	// BEST EFFORT: Send outcome notification to requester (Story 2.5, graceful degradation)
+	postID, notifErr := notifications.SendOutcomeNotificationDM(p.API, p.botUserID, updatedRecord)
+	if notifErr != nil {
+		// Story 2.6: Classify error and provide resolution suggestion (AC6)
+		errorType, suggestion := notifications.ClassifyDMError(notifErr)
+
+		// Log warning but DO NOT return error (decision is already recorded successfully)
+		p.API.LogWarn("Failed to send outcome notification",
+			"approval_id", approvalID,
+			"requester_id", updatedRecord.RequesterID,
+			"error", notifErr.Error(),
+			"error_type", errorType,
+			"suggestion", suggestion,
+		)
+	} else {
+		// Success - update OutcomeNotified flag (also best effort)
+		p.API.LogInfo("Outcome notification sent",
+			"approval_id", approvalID,
+			"code", updatedRecord.Code,
+			"decision", decision,
+			"requester_id", updatedRecord.RequesterID,
+			"post_id", postID,
+		)
+		updatedRecord.OutcomeNotified = true
+		if flagErr := p.store.SaveApproval(updatedRecord); flagErr != nil {
+			p.API.LogError("Failed to update OutcomeNotified flag",
+				"approval_id", approvalID,
+				"error", flagErr.Error(),
+			)
+			// Continue anyway - notification was sent successfully
 		}
 	}
 
