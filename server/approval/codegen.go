@@ -59,7 +59,7 @@ func GenerateUniqueCode(store Storer) (string, error) {
 		}
 
 		// Check if code already exists
-		key := fmt.Sprintf("approval_code:%s", code)
+		key := fmt.Sprintf("approval:code:%s", code)
 		existing, err := store.KVGet(key)
 		if err != nil {
 			return "", fmt.Errorf("failed to check code uniqueness: %w", err)

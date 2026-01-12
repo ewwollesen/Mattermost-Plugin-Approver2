@@ -139,7 +139,7 @@ func TestHandleCancelCommand(t *testing.T) {
 		api.On("RegisterCommand", mock.AnythingOfType("*model.Command")).Return(nil)
 
 		// Mock KV store operations for GetByCode
-		api.On("KVGet", "approval_code:A-X7K9Q2").Return([]byte(`"record123"`), nil)
+		api.On("KVGet", "approval:code:A-X7K9Q2").Return([]byte(`"record123"`), nil)
 
 		// Mock record retrieval
 		recordJSON := `{
@@ -155,7 +155,11 @@ func TestHandleCancelCommand(t *testing.T) {
 
 		// Mock save approval (will update status to canceled)
 		api.On("KVSet", "approval:record:record123", mock.Anything).Return(nil)
-		api.On("KVSet", "approval_code:A-X7K9Q2", mock.Anything).Return(nil)
+		api.On("KVSet", "approval:code:A-X7K9Q2", mock.Anything).Return(nil)
+		// Mock requester and approver index KVSet calls
+		api.On("KVSet", mock.MatchedBy(func(key string) bool {
+			return len(key) > 15 && key[:15] == "approval:index:"
+		}), mock.Anything).Return(nil)
 
 		// Mock ephemeral post
 		api.On("SendEphemeralPost", "user123", mock.MatchedBy(func(post *model.Post) bool {
@@ -193,7 +197,7 @@ func TestHandleCancelCommand(t *testing.T) {
 		api.On("RegisterCommand", mock.AnythingOfType("*model.Command")).Return(nil)
 
 		// Mock KV store operations
-		api.On("KVGet", "approval_code:A-X7K9Q2").Return([]byte(`"record123"`), nil)
+		api.On("KVGet", "approval:code:A-X7K9Q2").Return([]byte(`"record123"`), nil)
 
 		recordJSON := `{
 			"id": "record123",
@@ -239,7 +243,7 @@ func TestHandleCancelCommand(t *testing.T) {
 		api.On("RegisterCommand", mock.AnythingOfType("*model.Command")).Return(nil)
 
 		// Mock KV store operations
-		api.On("KVGet", "approval_code:A-X7K9Q2").Return([]byte(`"record123"`), nil)
+		api.On("KVGet", "approval:code:A-X7K9Q2").Return([]byte(`"record123"`), nil)
 
 		recordJSON := `{
 			"id": "record123",
@@ -285,7 +289,7 @@ func TestHandleCancelCommand(t *testing.T) {
 		api.On("RegisterCommand", mock.AnythingOfType("*model.Command")).Return(nil)
 
 		// Mock KV store operations - code not found
-		api.On("KVGet", "approval_code:Z-NOTFND").Return(nil, nil)
+		api.On("KVGet", "approval:code:Z-NOTFND").Return(nil, nil)
 
 		// Mock logging
 		api.On("LogError", mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return()
@@ -320,7 +324,7 @@ func TestHandleCancelCommand(t *testing.T) {
 		api.On("RegisterCommand", mock.AnythingOfType("*model.Command")).Return(nil)
 
 		// Mock KV store operations
-		api.On("KVGet", "approval_code:A-X7K9Q2").Return([]byte(`"record123"`), nil)
+		api.On("KVGet", "approval:code:A-X7K9Q2").Return([]byte(`"record123"`), nil)
 
 		recordJSON := `{
 			"id": "record123",
@@ -335,7 +339,11 @@ func TestHandleCancelCommand(t *testing.T) {
 
 		// Mock save operations
 		api.On("KVSet", "approval:record:record123", mock.Anything).Return(nil)
-		api.On("KVSet", "approval_code:A-X7K9Q2", mock.Anything).Return(nil)
+		api.On("KVSet", "approval:code:A-X7K9Q2", mock.Anything).Return(nil)
+		// Mock requester and approver index KVSet calls
+		api.On("KVSet", mock.MatchedBy(func(key string) bool {
+			return len(key) > 15 && key[:15] == "approval:index:"
+		}), mock.Anything).Return(nil)
 
 		// Mock ephemeral post failure (returns nil)
 		api.On("SendEphemeralPost", "user123", mock.Anything).Return(nil)

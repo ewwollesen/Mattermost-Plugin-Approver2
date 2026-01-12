@@ -40,12 +40,16 @@ func TestHandleApproveNew_EphemeralConfirmation(t *testing.T) {
 
 		// Mock KV store operations with specific key pattern validation
 		api.On("KVGet", mock.MatchedBy(func(key string) bool {
-			// Should query approval:record: or approval_code: keys
-			return len(key) > 10 && (key[:16] == "approval:record:" || key[:14] == "approval_code:")
+			// Should query approval:record:, approval:code:, or approval:index: keys
+			return len(key) > 10 && (key[:16] == "approval:record:" ||
+				key[:14] == "approval:code:" ||
+				(len(key) > 15 && key[:15] == "approval:index:"))
 		})).Return(nil, nil)
 		api.On("KVSet", mock.MatchedBy(func(key string) bool {
-			// Should write to approval:record: or approval_code: keys
-			return len(key) > 10 && (key[:16] == "approval:record:" || key[:14] == "approval_code:")
+			// Should write to approval:record:, approval:code:, or approval:index: keys
+			return len(key) > 10 && (key[:16] == "approval:record:" ||
+				key[:14] == "approval:code:" ||
+				(len(key) > 15 && key[:15] == "approval:index:"))
 		}), mock.Anything).Return(nil)
 
 		// Story 2.1: Mock notification DM calls
@@ -124,10 +128,10 @@ func TestHandleApproveNew_EphemeralConfirmation(t *testing.T) {
 		api.On("GetUser", "user999").Return(requester, nil)
 		api.On("GetUser", "user888").Return(approver, nil)
 		api.On("KVGet", mock.MatchedBy(func(key string) bool {
-			return len(key) > 10 && (key[:16] == "approval:record:" || key[:14] == "approval_code:")
+			return len(key) > 10 && (key[:16] == "approval:record:" || key[:14] == "approval:code:" || (len(key) > 15 && key[:15] == "approval:index:"))
 		})).Return(nil, nil)
 		api.On("KVSet", mock.MatchedBy(func(key string) bool {
-			return len(key) > 10 && (key[:16] == "approval:record:" || key[:14] == "approval_code:")
+			return len(key) > 10 && (key[:16] == "approval:record:" || key[:14] == "approval:code:" || (len(key) > 15 && key[:15] == "approval:index:"))
 		}), mock.Anything).Return(nil)
 
 		// Story 2.1: Mock notification DM calls
@@ -204,10 +208,16 @@ func TestHandleApproveNew_EphemeralConfirmation(t *testing.T) {
 			savedData = args.Get(1).([]byte)
 		}).Return(nil)
 
-		// Also mock the code index KVSet (approval_code:{code} → recordID)
+		// Also mock the code index KVSet (approval:code:{code} → recordID)
 		api.On("KVSet", mock.MatchedBy(func(key string) bool {
-			// Match the code key pattern: approval_code:{code}
-			return len(key) > 14 && key[:14] == "approval_code:"
+			// Match the code key pattern: approval:code:{code}
+			return len(key) > 14 && key[:14] == "approval:code:"
+		}), mock.Anything).Return(nil)
+
+		// Mock requester and approver index KVSet calls
+		api.On("KVSet", mock.MatchedBy(func(key string) bool {
+			// Match index key patterns: approval:index:requester: or approval:index:approver:
+			return len(key) > 15 && key[:15] == "approval:index:"
 		}), mock.Anything).Return(nil)
 
 		// Story 2.1: Mock notification DM calls
@@ -288,10 +298,10 @@ func TestHandleApproveNew_EphemeralConfirmation(t *testing.T) {
 		api.On("GetUser", "req555").Return(requester, nil)
 		api.On("GetUser", "app666").Return(approver, nil)
 		api.On("KVGet", mock.MatchedBy(func(key string) bool {
-			return len(key) > 10 && (key[:16] == "approval:record:" || key[:14] == "approval_code:")
+			return len(key) > 10 && (key[:16] == "approval:record:" || key[:14] == "approval:code:" || (len(key) > 15 && key[:15] == "approval:index:"))
 		})).Return(nil, nil)
 		api.On("KVSet", mock.MatchedBy(func(key string) bool {
-			return len(key) > 10 && (key[:16] == "approval:record:" || key[:14] == "approval_code:")
+			return len(key) > 10 && (key[:16] == "approval:record:" || key[:14] == "approval:code:" || (len(key) > 15 && key[:15] == "approval:index:"))
 		}), mock.Anything).Return(nil)
 
 		// Story 2.1: Mock notification DM calls
@@ -369,10 +379,10 @@ func TestHandleApproveNew_Performance(t *testing.T) {
 		api.On("GetUser", "perf123").Return(requester, nil)
 		api.On("GetUser", "perf456").Return(approver, nil)
 		api.On("KVGet", mock.MatchedBy(func(key string) bool {
-			return len(key) > 10 && (key[:16] == "approval:record:" || key[:14] == "approval_code:")
+			return len(key) > 10 && (key[:16] == "approval:record:" || key[:14] == "approval:code:" || (len(key) > 15 && key[:15] == "approval:index:"))
 		})).Return(nil, nil)
 		api.On("KVSet", mock.MatchedBy(func(key string) bool {
-			return len(key) > 10 && (key[:16] == "approval:record:" || key[:14] == "approval_code:")
+			return len(key) > 10 && (key[:16] == "approval:record:" || key[:14] == "approval:code:" || (len(key) > 15 && key[:15] == "approval:index:"))
 		}), mock.Anything).Return(nil)
 
 		// Story 2.1: Mock notification DM calls
@@ -451,7 +461,7 @@ func TestHandleApproveNew_IntegrationFlow(t *testing.T) {
 
 		// Mock KV store operations for approval persistence with key validation
 		api.On("KVGet", mock.MatchedBy(func(key string) bool {
-			return len(key) > 10 && (key[:16] == "approval:record:" || key[:14] == "approval_code:")
+			return len(key) > 10 && (key[:16] == "approval:record:" || key[:14] == "approval:code:" || (len(key) > 15 && key[:15] == "approval:index:"))
 		})).Return(nil, nil)
 
 		// AC1: Capture the ApprovalRecord to verify complete data
@@ -464,7 +474,12 @@ func TestHandleApproveNew_IntegrationFlow(t *testing.T) {
 
 		// Also mock code index KVSet
 		api.On("KVSet", mock.MatchedBy(func(key string) bool {
-			return len(key) > 14 && key[:14] == "approval_code:"
+			return len(key) > 14 && key[:14] == "approval:code:"
+		}), mock.Anything).Return(nil)
+
+		// Mock requester and approver index KVSet calls
+		api.On("KVSet", mock.MatchedBy(func(key string) bool {
+			return len(key) > 15 && key[:15] == "approval:index:"
 		}), mock.Anything).Return(nil)
 
 		// Story 2.1: Mock notification DM calls
@@ -589,7 +604,7 @@ func TestHandleApproveNew_IntegrationFlow(t *testing.T) {
 
 		// Mock successful KV operations with key validation
 		api.On("KVGet", mock.MatchedBy(func(key string) bool {
-			return len(key) > 10 && (key[:16] == "approval:record:" || key[:14] == "approval_code:")
+			return len(key) > 10 && (key[:16] == "approval:record:" || key[:14] == "approval:code:" || (len(key) > 15 && key[:15] == "approval:index:"))
 		})).Return(nil, nil)
 		var recordSaved bool
 		api.On("KVSet", mock.MatchedBy(func(key string) bool {
@@ -598,7 +613,11 @@ func TestHandleApproveNew_IntegrationFlow(t *testing.T) {
 			recordSaved = true
 		}).Return(nil)
 		api.On("KVSet", mock.MatchedBy(func(key string) bool {
-			return len(key) > 14 && key[:14] == "approval_code:"
+			return len(key) > 14 && key[:14] == "approval:code:"
+		}), mock.Anything).Return(nil)
+		// Mock requester and approver index KVSet calls
+		api.On("KVSet", mock.MatchedBy(func(key string) bool {
+			return len(key) > 15 && key[:15] == "approval:index:"
 		}), mock.Anything).Return(nil)
 
 		// Story 2.1: Mock notification DM calls
@@ -684,7 +703,7 @@ func TestHandleCancelCommand_Integration(t *testing.T) {
 		}
 
 		// Mock KV operations for successful cancellation
-		api.On("KVGet", "approval_code:A-TEST01").Return([]byte(`"record-to-cancel"`), nil)
+		api.On("KVGet", "approval:code:A-TEST01").Return([]byte(`"record-to-cancel"`), nil)
 
 		recordJSON, _ := json.Marshal(record)
 		api.On("KVGet", "approval:record:record-to-cancel").Return(recordJSON, nil)
@@ -694,7 +713,11 @@ func TestHandleCancelCommand_Integration(t *testing.T) {
 		api.On("KVSet", "approval:record:record-to-cancel", mock.Anything).Run(func(args mock.Arguments) {
 			capturedRecord = args.Get(1).([]byte)
 		}).Return(nil)
-		api.On("KVSet", "approval_code:A-TEST01", mock.Anything).Return(nil)
+		api.On("KVSet", "approval:code:A-TEST01", mock.Anything).Return(nil)
+		// Mock requester and approver index KVSet calls
+		api.On("KVSet", mock.MatchedBy(func(key string) bool {
+			return len(key) > 15 && key[:15] == "approval:index:"
+		}), mock.Anything).Return(nil)
 
 		// Mock ephemeral confirmation post
 		var capturedMessage string
@@ -769,7 +792,7 @@ func TestHandleCancelCommand_Integration(t *testing.T) {
 			DecidedAt:   1704931300000,
 		}
 
-		api.On("KVGet", "approval_code:A-ALRDYC").Return([]byte(`"record456"`), nil)
+		api.On("KVGet", "approval:code:A-ALRDYC").Return([]byte(`"record456"`), nil)
 		canceledJSON, _ := json.Marshal(canceledRecord)
 		api.On("KVGet", "approval:record:record456").Return(canceledJSON, nil)
 
@@ -819,7 +842,7 @@ func TestHandleCancelCommand_Integration(t *testing.T) {
 			DecidedAt:   0,
 		}
 
-		api.On("KVGet", "approval_code:A-NOAUTH").Return([]byte(`"record789"`), nil)
+		api.On("KVGet", "approval:code:A-NOAUTH").Return([]byte(`"record789"`), nil)
 		recordJSON, _ := json.Marshal(record)
 		api.On("KVGet", "approval:record:record789").Return(recordJSON, nil)
 
@@ -873,11 +896,15 @@ func TestHandleCancelCommand_Performance(t *testing.T) {
 			DecidedAt:   0,
 		}
 
-		api.On("KVGet", "approval_code:A-PERF01").Return([]byte(`"perf-record"`), nil)
+		api.On("KVGet", "approval:code:A-PERF01").Return([]byte(`"perf-record"`), nil)
 		recordJSON, _ := json.Marshal(record)
 		api.On("KVGet", "approval:record:perf-record").Return(recordJSON, nil)
 		api.On("KVSet", "approval:record:perf-record", mock.Anything).Return(nil)
-		api.On("KVSet", "approval_code:A-PERF01", mock.Anything).Return(nil)
+		api.On("KVSet", "approval:code:A-PERF01", mock.Anything).Return(nil)
+		// Mock requester and approver index KVSet calls
+		api.On("KVSet", mock.MatchedBy(func(key string) bool {
+			return len(key) > 15 && key[:15] == "approval:index:"
+		}), mock.Anything).Return(nil)
 		api.On("SendEphemeralPost", "perfuser", mock.Anything).Return(&model.Post{})
 
 		// Mock logging

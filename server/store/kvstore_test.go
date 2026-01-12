@@ -67,7 +67,7 @@ func TestKVStore_SaveApproval(t *testing.T) {
 
 		// Mock KVGet for code uniqueness check first
 		api.On("KVGet", mock.MatchedBy(func(key string) bool {
-			return key[:14] == "approval_code:"
+			return len(key) > 14 && key[:14] == "approval:code:"
 		})).Return(nil, nil)
 
 		record, err := approval.NewApprovalRecord(
@@ -102,7 +102,7 @@ func TestKVStore_GetApproval(t *testing.T) {
 
 		// Mock KVGet for code uniqueness check (returns nil = code doesn't exist)
 		api.On("KVGet", mock.MatchedBy(func(key string) bool {
-			return len(key) > 14 && key[:14] == "approval_code:"
+			return len(key) > 14 && key[:14] == "approval:code:"
 		})).Return(nil, nil)
 
 		record, err := approval.NewApprovalRecord(
@@ -221,7 +221,7 @@ func TestKVStore_SaveApproval_Immutability(t *testing.T) {
 
 		// Mock KVGet for code uniqueness check first
 		api.On("KVGet", mock.MatchedBy(func(key string) bool {
-			return len(key) > 14 && key[:14] == "approval_code:"
+			return len(key) > 14 && key[:14] == "approval:code:"
 		})).Return(nil, nil)
 
 		// Create an approved record
@@ -258,7 +258,7 @@ func TestKVStore_SaveApproval_Immutability(t *testing.T) {
 		// Mock KVGet for code uniqueness check first
 		codeKeyMatched := false
 		api.On("KVGet", mock.Anything).Return(func(key string) []byte {
-			if len(key) > 14 && key[:14] == "approval_code:" && !codeKeyMatched {
+			if len(key) > 14 && key[:14] == "approval:code:" && !codeKeyMatched {
 				codeKeyMatched = true
 				return nil
 			}
@@ -292,8 +292,9 @@ func TestKVStore_GetByCode(t *testing.T) {
 		api := &plugintest.API{}
 		store := NewKVStore(api)
 
-		// Mock ALL KVGet calls for code generation
-		api.On("KVGet", mock.Anything).Return(nil, nil)
+		// Create a record first (need to mock KVGet calls during NewApprovalRecord)
+		// NewApprovalRecord calls KVGet multiple times for code uniqueness checks
+		api.On("KVGet", mock.Anything).Return(nil, nil).Maybe()
 
 		record, err := approval.NewApprovalRecord(
 			store,
@@ -305,15 +306,19 @@ func TestKVStore_GetByCode(t *testing.T) {
 		)
 		require.NoError(t, err)
 
+		// Clear the generic mock and set up specific mocks for GetByCode
+		api.ExpectedCalls = nil
+		api.Calls = nil
+
 		// Mock KVGet for code lookup during GetByCode (using new key format)
 		codeKey := fmt.Sprintf("approval:code:%s", record.Code)
 		recordIDJSON, _ := json.Marshal(record.ID)
-		api.On("KVGet", codeKey).Return(recordIDJSON, nil)
+		api.On("KVGet", codeKey).Return(recordIDJSON, nil).Once()
 
 		// Mock KVGet for record key to return full record
 		recordKey := fmt.Sprintf("approval:record:%s", record.ID)
 		recordJSON, _ := json.Marshal(record)
-		api.On("KVGet", recordKey).Return(recordJSON, nil)
+		api.On("KVGet", recordKey).Return(recordJSON, nil).Once()
 
 		retrieved, err := store.GetByCode(record.Code)
 		assert.NoError(t, err)
@@ -489,10 +494,27 @@ func TestKVStore_GetUserApprovals(t *testing.T) {
 		}
 		record1JSON, _ := json.Marshal(record1)
 		record2JSON, _ := json.Marshal(record2)
+		record1IDJSON, _ := json.Marshal("record1")
+		record2IDJSON, _ := json.Marshal("record2")
 
-		keys := []string{"approval:record:record1", "approval:record:record2"}
-		api.On("KVList", 0, MaxApprovalRecordsLimit).Return(keys, nil)
+		// Mock KVList for requester index (user1 is requester of record1)
+		requesterIndexKey := "approval:index:requester:user1:9999999998999:record1"
+		api.On("KVList", 0, MaxApprovalRecordsLimit).Return([]string{requesterIndexKey}, nil).Once()
+
+		// Mock KVGet for requester index to return record1 ID
+		api.On("KVGet", requesterIndexKey).Return(record1IDJSON, nil)
+
+		// Mock KVGet for record1 full record
 		api.On("KVGet", "approval:record:record1").Return(record1JSON, nil)
+
+		// Mock KVList for approver index (user1 is approver of record2)
+		approverIndexKey := "approval:index:approver:user1:9999999997999:record2"
+		api.On("KVList", 0, MaxApprovalRecordsLimit).Return([]string{approverIndexKey}, nil).Once()
+
+		// Mock KVGet for approver index to return record2 ID
+		api.On("KVGet", approverIndexKey).Return(record2IDJSON, nil)
+
+		// Mock KVGet for record2 full record
 		api.On("KVGet", "approval:record:record2").Return(record2JSON, nil)
 
 		records, err := store.GetUserApprovals("user1")
@@ -529,12 +551,29 @@ func TestKVStore_GetUserApprovals(t *testing.T) {
 		record1JSON, _ := json.Marshal(record1)
 		record2JSON, _ := json.Marshal(record2)
 		record3JSON, _ := json.Marshal(record3)
+		record1IDJSON, _ := json.Marshal("record1")
+		record2IDJSON, _ := json.Marshal("record2")
+		record3IDJSON, _ := json.Marshal("record3")
 
-		keys := []string{"approval:record:record1", "approval:record:record2", "approval:record:record3"}
-		api.On("KVList", 0, MaxApprovalRecordsLimit).Return(keys, nil)
+		// Mock KVList for requester index (user1 is requester of all 3)
+		// Keys with inverted timestamps: newer records have smaller inverted values, so they come first
+		indexKey1 := "approval:index:requester:user1:9999999998999:record1" // oldest (inverted 1000)
+		indexKey2 := "approval:index:requester:user1:9999999996999:record2" // newest (inverted 3000)
+		indexKey3 := "approval:index:requester:user1:9999999997999:record3" // middle (inverted 2000)
+		api.On("KVList", 0, MaxApprovalRecordsLimit).Return([]string{indexKey1, indexKey2, indexKey3}, nil).Once()
+
+		// Mock KVGet for index keys
+		api.On("KVGet", indexKey1).Return(record1IDJSON, nil)
+		api.On("KVGet", indexKey2).Return(record2IDJSON, nil)
+		api.On("KVGet", indexKey3).Return(record3IDJSON, nil)
+
+		// Mock KVGet for full records
 		api.On("KVGet", "approval:record:record1").Return(record1JSON, nil)
 		api.On("KVGet", "approval:record:record2").Return(record2JSON, nil)
 		api.On("KVGet", "approval:record:record3").Return(record3JSON, nil)
+
+		// Mock KVList for approver index (empty)
+		api.On("KVList", 0, MaxApprovalRecordsLimit).Return([]string{}, nil).Once()
 
 		records, err := store.GetUserApprovals("user1")
 		require.NoError(t, err)
@@ -570,21 +609,26 @@ func TestKVStore_GetUserApprovals(t *testing.T) {
 			RequesterID: "user1",
 			ApproverID:  "user2",
 			Code:        "A-USER1",
+			CreatedAt:   1000,
 		}
-		record2 := &approval.ApprovalRecord{
-			ID:          "record2",
-			RequesterID: "user2",
-			ApproverID:  "user3",
-			Code:        "A-USER2",
-		}
+		// record2 is not needed - it's never queried because user1 is not in its indexes
 		record1JSON, _ := json.Marshal(record1)
-		record2JSON, _ := json.Marshal(record2)
+		record1IDJSON, _ := json.Marshal("record1")
 
-		keys := []string{"approval:record:record1", "approval:record:record2"}
-		api.On("KVList", 0, MaxApprovalRecordsLimit).Return(keys, nil)
+		// Mock KVList for requester index - only returns record1 for user1
+		indexKey1 := "approval:index:requester:user1:9999999998999:record1"
+		api.On("KVList", 0, MaxApprovalRecordsLimit).Return([]string{indexKey1}, nil).Once()
+
+		// Mock KVGet for index key
+		api.On("KVGet", indexKey1).Return(record1IDJSON, nil)
+
+		// Mock KVGet for full record
 		api.On("KVGet", "approval:record:record1").Return(record1JSON, nil)
-		api.On("KVGet", "approval:record:record2").Return(record2JSON, nil)
 
+		// Mock KVList for approver index - returns empty (user1 is not an approver)
+		api.On("KVList", 0, MaxApprovalRecordsLimit).Return([]string{}, nil).Once()
+
+		// Note: record2 is never queried because user1 is not in its indexes
 		records, err := store.GetUserApprovals("user1")
 		require.NoError(t, err)
 		assert.Len(t, records, 1)
@@ -615,16 +659,31 @@ func TestKVStore_GetUserApprovals(t *testing.T) {
 			Code:        "A-GOOD",
 			RequesterID: "user1",
 			ApproverID:  "user2",
+			CreatedAt:   1000,
 		}
 		record1JSON, _ := json.Marshal(record1)
+		record1IDJSON, _ := json.Marshal("record1")
+		record2IDJSON, _ := json.Marshal("record2")
 
-		keys := []string{"approval:record:record1", "approval:record:record2"}
-		api.On("KVList", 0, MaxApprovalRecordsLimit).Return(keys, nil)
+		// Mock KVList for requester index - returns 2 index keys
+		indexKey1 := "approval:index:requester:user1:9999999998999:record1"
+		indexKey2 := "approval:index:requester:user1:9999999998999:record2"
+		api.On("KVList", 0, MaxApprovalRecordsLimit).Return([]string{indexKey1, indexKey2}, nil).Once()
+
+		// Mock KVGet for index keys
+		api.On("KVGet", indexKey1).Return(record1IDJSON, nil)
+		api.On("KVGet", indexKey2).Return(record2IDJSON, nil)
+
+		// Mock KVGet for records - record1 succeeds, record2 fails
 		api.On("KVGet", "approval:record:record1").Return(record1JSON, nil)
-		// record2 retrieval fails
 		appErr := model.NewAppError("test", "test.error", nil, "", 500)
 		api.On("KVGet", "approval:record:record2").Return(nil, appErr)
+
+		// Mock LogWarn for the failed retrieval
 		api.On("LogWarn", mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return()
+
+		// Mock KVList for approver index (empty)
+		api.On("KVList", 0, MaxApprovalRecordsLimit).Return([]string{}, nil).Once()
 
 		records, err := store.GetUserApprovals("user1")
 		require.NoError(t, err)
