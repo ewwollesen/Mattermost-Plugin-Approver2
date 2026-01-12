@@ -7,8 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+- Nothing yet
+
+## [0.1.0] - 2026-01-12
+
+Initial MVP release with complete approval workflow functionality.
+
 ### Added
-- Initial MVP implementation of approval workflow plugin
 - `/approve new` - Create approval requests via interactive modal
 - `/approve list` - View all approval requests (submitted and received)
 - `/approve get [ID]` - View specific approval record details
@@ -28,10 +34,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Approval request data model with status management
 - Intelligent indexing system for list operations
 - Error handling and validation throughout
-
-## [0.1.0] - TBD
-
-Initial MVP release (pending completion of all Epic 1-3 stories).
 
 ---
 
