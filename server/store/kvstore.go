@@ -3,6 +3,7 @@ package store
 import (
 	"encoding/json"
 	"fmt"
+	"sort"
 
 	"github.com/mattermost/mattermost-plugin-approver2/server/approval"
 	"github.com/mattermost/mattermost/server/public/plugin"
@@ -53,7 +54,7 @@ func (s *KVStore) SaveApproval(record *approval.ApprovalRecord) error {
 		return fmt.Errorf("failed to save approval record %s: %w", record.ID, appErr)
 	}
 
-	// Create code lookup index: approval_code:{code} → recordID
+	// Create code lookup index: approval:code:{code} → recordID
 	if record.Code != "" {
 		codeKey := makeCodeKey(record.Code)
 		recordIDJSON, err := json.Marshal(record.ID)
@@ -64,6 +65,36 @@ func (s *KVStore) SaveApproval(record *approval.ApprovalRecord) error {
 		appErr = s.api.KVSet(codeKey, recordIDJSON)
 		if appErr != nil {
 			return fmt.Errorf("failed to save code lookup index for %s: %w", record.Code, appErr)
+		}
+	}
+
+	// Create requester index: approval:index:requester:{userID}:{invertedTimestamp}:{recordID} → recordID
+	// This enables efficient queries for "approvals I requested"
+	if record.RequesterID != "" && record.CreatedAt > 0 {
+		requesterKey := makeRequesterIndexKey(record.RequesterID, record.CreatedAt, record.ID)
+		recordIDJSON, err := json.Marshal(record.ID)
+		if err != nil {
+			return fmt.Errorf("failed to marshal record ID for requester index: %w", err)
+		}
+
+		appErr = s.api.KVSet(requesterKey, recordIDJSON)
+		if appErr != nil {
+			return fmt.Errorf("failed to save requester index for %s: %w", record.ID, appErr)
+		}
+	}
+
+	// Create approver index: approval:index:approver:{userID}:{invertedTimestamp}:{recordID} → recordID
+	// This enables efficient queries for "approvals I need to decide"
+	if record.ApproverID != "" && record.CreatedAt > 0 {
+		approverKey := makeApproverIndexKey(record.ApproverID, record.CreatedAt, record.ID)
+		recordIDJSON, err := json.Marshal(record.ID)
+		if err != nil {
+			return fmt.Errorf("failed to marshal record ID for approver index: %w", err)
+		}
+
+		appErr = s.api.KVSet(approverKey, recordIDJSON)
+		if appErr != nil {
+			return fmt.Errorf("failed to save approver index for %s: %w", record.ID, appErr)
 		}
 	}
 
@@ -138,6 +169,209 @@ func (s *KVStore) GetByCode(code string) (*approval.ApprovalRecord, error) {
 	return s.GetApproval(recordID)
 }
 
+const (
+	// MaxApprovalRecordsLimit is the maximum number of approval records that can be retrieved at once
+	// This limit prevents memory exhaustion and ensures reasonable query performance
+	MaxApprovalRecordsLimit = 10000
+)
+
+// GetAllApprovals retrieves all approval records from the KV store
+// This method is used for admin operations like the status command to calculate statistics
+//
+// Performance: This method loads up to MaxApprovalRecordsLimit (10,000) records into memory.
+// For deployments with more than 10,000 approval records, only the first 10,000 will be returned
+// and a warning will be logged. Consider implementing pagination for very large deployments.
+func (s *KVStore) GetAllApprovals() ([]*approval.ApprovalRecord, error) {
+	// List all keys with the approval record prefix
+	keys, appErr := s.api.KVList(0, MaxApprovalRecordsLimit)
+	if appErr != nil {
+		return nil, fmt.Errorf("failed to list approval records: %w", appErr)
+	}
+
+	// Warn if we hit the limit (may indicate truncated results)
+	if len(keys) >= MaxApprovalRecordsLimit {
+		s.api.LogWarn("GetAllApprovals hit maximum record limit - results may be incomplete",
+			"limit", MaxApprovalRecordsLimit,
+			"keys_returned", len(keys),
+			"recommendation", "Consider implementing pagination for large deployments",
+		)
+	}
+
+	records := make([]*approval.ApprovalRecord, 0)
+	recordPrefix := "approval:record:"
+
+	// Iterate through keys and retrieve records
+	for _, key := range keys {
+		// Filter for approval record keys only (exclude code indexes and other keys)
+		if len(key) < len(recordPrefix) || key[:len(recordPrefix)] != recordPrefix {
+			continue
+		}
+
+		// Extract record ID from key
+		recordID := key[len(recordPrefix):]
+
+		// Retrieve the record
+		record, err := s.GetApproval(recordID)
+		if err != nil {
+			// Log error but continue with other records
+			// This ensures partial failures don't prevent status reporting
+			s.api.LogWarn("Failed to retrieve approval record during GetAllApprovals",
+				"record_id", recordID,
+				"error", err.Error(),
+			)
+			continue
+		}
+
+		records = append(records, record)
+	}
+
+	return records, nil
+}
+
+// GetUserApprovals retrieves all approval records where the specified user is either requester or approver
+// This method is used for the /approve list command to show a user their approval history
+//
+// Performance: Uses efficient prefix-based index queries instead of scanning all records.
+// Queries two indexes:
+//   - approval:index:requester:{userID}:* for records where user is requester
+//   - approval:index:approver:{userID}:* for records where user is approver
+//
+// Records are naturally sorted by timestamp descending (most recent first) due to inverted
+// timestamp keys, eliminating the need for in-memory sorting.
+func (s *KVStore) GetUserApprovals(userID string) ([]*approval.ApprovalRecord, error) {
+	if userID == "" {
+		return nil, fmt.Errorf("user ID is required")
+	}
+
+	// Track unique record IDs to avoid duplicates (user could be both requester and approver)
+	seenRecords := make(map[string]bool)
+	records := make([]*approval.ApprovalRecord, 0)
+
+	// Query 1: Get records where user is the requester
+	requesterPrefix := fmt.Sprintf("approval:index:requester:%s:", userID)
+	requesterKeys, appErr := s.api.KVList(0, MaxApprovalRecordsLimit)
+	if appErr != nil {
+		return nil, fmt.Errorf("failed to list requester index keys: %w", appErr)
+	}
+
+	for _, key := range requesterKeys {
+		// Filter for this user's requester index keys only
+		if len(key) < len(requesterPrefix) || key[:len(requesterPrefix)] != requesterPrefix {
+			continue
+		}
+
+		// Get the record ID from the index
+		recordIDData, appErr := s.api.KVGet(key)
+		if appErr != nil {
+			s.api.LogWarn("Failed to get record ID from requester index",
+				"key", key,
+				"user_id", userID,
+				"error", appErr.Error(),
+			)
+			continue
+		}
+
+		if recordIDData == nil {
+			continue
+		}
+
+		var recordID string
+		if err := json.Unmarshal(recordIDData, &recordID); err != nil {
+			s.api.LogWarn("Failed to unmarshal record ID from requester index",
+				"key", key,
+				"user_id", userID,
+				"error", err.Error(),
+			)
+			continue
+		}
+
+		// Skip if already seen (handles duplicate case)
+		if seenRecords[recordID] {
+			continue
+		}
+
+		// Retrieve the full record
+		record, err := s.GetApproval(recordID)
+		if err != nil {
+			s.api.LogWarn("Failed to retrieve approval record from requester index",
+				"record_id", recordID,
+				"user_id", userID,
+				"error", err.Error(),
+			)
+			continue
+		}
+
+		records = append(records, record)
+		seenRecords[recordID] = true
+	}
+
+	// Query 2: Get records where user is the approver
+	approverPrefix := fmt.Sprintf("approval:index:approver:%s:", userID)
+	approverKeys, appErr := s.api.KVList(0, MaxApprovalRecordsLimit)
+	if appErr != nil {
+		return nil, fmt.Errorf("failed to list approver index keys: %w", appErr)
+	}
+
+	for _, key := range approverKeys {
+		// Filter for this user's approver index keys only
+		if len(key) < len(approverPrefix) || key[:len(approverPrefix)] != approverPrefix {
+			continue
+		}
+
+		// Get the record ID from the index
+		recordIDData, appErr := s.api.KVGet(key)
+		if appErr != nil {
+			s.api.LogWarn("Failed to get record ID from approver index",
+				"key", key,
+				"user_id", userID,
+				"error", appErr.Error(),
+			)
+			continue
+		}
+
+		if recordIDData == nil {
+			continue
+		}
+
+		var recordID string
+		if err := json.Unmarshal(recordIDData, &recordID); err != nil {
+			s.api.LogWarn("Failed to unmarshal record ID from approver index",
+				"key", key,
+				"user_id", userID,
+				"error", err.Error(),
+			)
+			continue
+		}
+
+		// Skip if already seen (handles case where user is both requester and approver)
+		if seenRecords[recordID] {
+			continue
+		}
+
+		// Retrieve the full record
+		record, err := s.GetApproval(recordID)
+		if err != nil {
+			s.api.LogWarn("Failed to retrieve approval record from approver index",
+				"record_id", recordID,
+				"user_id", userID,
+				"error", err.Error(),
+			)
+			continue
+		}
+
+		records = append(records, record)
+		seenRecords[recordID] = true
+	}
+
+	// Records are naturally sorted by timestamp descending due to inverted timestamp keys
+	// However, when combining requester and approver indexes, we need to sort the merged result
+	sort.Slice(records, func(i, j int) bool {
+		return records[i].CreatedAt > records[j].CreatedAt
+	})
+
+	return records, nil
+}
+
 // KVGet implements the Storer interface for code generation uniqueness checks
 func (s *KVStore) KVGet(key string) ([]byte, error) {
 	data, appErr := s.api.KVGet(key)
@@ -154,5 +388,23 @@ func makeRecordKey(id string) string {
 
 // makeCodeKey generates the KV store key for code lookup index
 func makeCodeKey(code string) string {
-	return fmt.Sprintf("approval_code:%s", code)
+	return fmt.Sprintf("approval:code:%s", code)
+}
+
+// makeRequesterIndexKey generates timestamped index key for requester queries
+// Format: approval:index:requester:{userID}:{timestamp}:{recordID}
+// Timestamp is inverted (9999999999999 - timestamp) to achieve descending order
+func makeRequesterIndexKey(userID string, timestamp int64, recordID string) string {
+	// Invert timestamp for descending order (most recent first)
+	invertedTimestamp := 9999999999999 - timestamp
+	return fmt.Sprintf("approval:index:requester:%s:%013d:%s", userID, invertedTimestamp, recordID)
+}
+
+// makeApproverIndexKey generates timestamped index key for approver queries
+// Format: approval:index:approver:{userID}:{timestamp}:{recordID}
+// Timestamp is inverted (9999999999999 - timestamp) to achieve descending order
+func makeApproverIndexKey(userID string, timestamp int64, recordID string) string {
+	// Invert timestamp for descending order (most recent first)
+	invertedTimestamp := 9999999999999 - timestamp
+	return fmt.Sprintf("approval:index:approver:%s:%013d:%s", userID, invertedTimestamp, recordID)
 }
