@@ -18,6 +18,7 @@ func TestHandleApproveNew_EphemeralConfirmation(t *testing.T) {
 		api := &plugintest.API{}
 		plugin := &Plugin{}
 		plugin.SetAPI(api)
+		plugin.botUserID = "bot123" // Set bot user ID for notification
 
 		// Mock user lookups
 		requester := &model.User{
@@ -47,6 +48,13 @@ func TestHandleApproveNew_EphemeralConfirmation(t *testing.T) {
 			return len(key) > 10 && (key[:16] == "approval:record:" || key[:14] == "approval_code:")
 		}), mock.Anything).Return(nil)
 
+		// Story 2.1: Mock notification DM calls
+		api.On("GetDirectChannel", "bot123", "approver456").Return(&model.Channel{Id: "dm_channel"}, nil)
+		api.On("CreatePost", mock.MatchedBy(func(post *model.Post) bool {
+			// This is the DM notification to approver
+			return post.UserId == "bot123" && post.ChannelId == "dm_channel"
+		})).Return(&model.Post{}, nil)
+
 		// Mock ephemeral post - This is what we're testing!
 		api.On("SendEphemeralPost", "requester123", mock.MatchedBy(func(post *model.Post) bool {
 			// Verify message format matches AC2 exactly
@@ -61,6 +69,7 @@ func TestHandleApproveNew_EphemeralConfirmation(t *testing.T) {
 		// Mock logging (use variadic matchers for flexible parameter counts)
 		api.On("LogInfo", mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything).Maybe()
 		api.On("LogError", mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything).Maybe()
+		api.On("LogWarn", mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything).Maybe()
 
 		// Create payload
 		payload := &model.SubmitDialogRequest{
@@ -82,9 +91,12 @@ func TestHandleApproveNew_EphemeralConfirmation(t *testing.T) {
 		assert.Empty(t, response.Error)
 		assert.Empty(t, response.Errors)
 
-		// Verify SendEphemeralPost was called (not CreatePost)
+		// Verify SendEphemeralPost was called for requester confirmation
 		api.AssertCalled(t, "SendEphemeralPost", "requester123", mock.Anything)
-		api.AssertNotCalled(t, "CreatePost", mock.Anything)
+		// Story 2.1: Verify notification DM was sent to approver
+		api.AssertCalled(t, "CreatePost", mock.MatchedBy(func(post *model.Post) bool {
+			return post.UserId == "bot123" && post.ChannelId == "dm_channel"
+		}))
 		api.AssertExpectations(t)
 	})
 
@@ -93,6 +105,7 @@ func TestHandleApproveNew_EphemeralConfirmation(t *testing.T) {
 		api := &plugintest.API{}
 		plugin := &Plugin{}
 		plugin.SetAPI(api)
+		plugin.botUserID = "bot123" // Set bot user ID for notification
 
 		requester := &model.User{
 			Id:       "user999",
@@ -117,6 +130,12 @@ func TestHandleApproveNew_EphemeralConfirmation(t *testing.T) {
 			return len(key) > 10 && (key[:16] == "approval:record:" || key[:14] == "approval_code:")
 		}), mock.Anything).Return(nil)
 
+		// Story 2.1: Mock notification DM calls
+		api.On("GetDirectChannel", "bot123", "user888").Return(&model.Channel{Id: "dm_channel"}, nil)
+		api.On("CreatePost", mock.MatchedBy(func(post *model.Post) bool {
+			return post.UserId == "bot123" && post.ChannelId == "dm_channel"
+		})).Return(&model.Post{}, nil)
+
 		// Verify the first argument to SendEphemeralPost is the requester's UserID
 		var capturedUserID string
 		api.On("SendEphemeralPost", mock.AnythingOfType("string"), mock.Anything).Run(func(args mock.Arguments) {
@@ -125,6 +144,7 @@ func TestHandleApproveNew_EphemeralConfirmation(t *testing.T) {
 
 		api.On("LogInfo", mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything).Maybe()
 		api.On("LogError", mock.Anything, mock.Anything, mock.Anything).Maybe()
+		api.On("LogWarn", mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything).Maybe()
 
 		payload := &model.SubmitDialogRequest{
 			UserId:     "user999",
@@ -152,6 +172,7 @@ func TestHandleApproveNew_EphemeralConfirmation(t *testing.T) {
 		api := &plugintest.API{}
 		plugin := &Plugin{}
 		plugin.SetAPI(api)
+		plugin.botUserID = "bot123" // Set bot user ID for notification
 
 		requester := &model.User{
 			Id:       "requester111",
@@ -189,13 +210,25 @@ func TestHandleApproveNew_EphemeralConfirmation(t *testing.T) {
 			return len(key) > 14 && key[:14] == "approval_code:"
 		}), mock.Anything).Return(nil)
 
+		// Story 2.1: Mock notification DM calls
+		api.On("GetDirectChannel", "bot123", "approver222").Return(&model.Channel{Id: "dm_channel"}, nil)
+		api.On("CreatePost", mock.MatchedBy(func(post *model.Post) bool {
+			return post.UserId == "bot123" && post.ChannelId == "dm_channel"
+		})).Return(&model.Post{}, nil)
+
 		// Mock SendEphemeralPost failure (returns nil)
 		api.On("SendEphemeralPost", "requester111", mock.Anything).Return(nil)
+
+		// Mock fallback CreatePost for ephemeral failure
+		api.On("CreatePost", mock.MatchedBy(func(post *model.Post) bool {
+			// This is the fallback confirmation post, not the DM notification
+			return post.UserId == "requester111"
+		})).Return(&model.Post{}, nil)
 
 		// Mock logging (should log error for failed confirmation and fallback)
 		api.On("LogInfo", mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything)
 		api.On("LogError", mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything).Maybe()
-		api.On("CreatePost", mock.Anything).Return(&model.Post{}, nil)
+		api.On("LogWarn", mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything).Maybe()
 
 		payload := &model.SubmitDialogRequest{
 			UserId:     "requester111",
@@ -236,6 +269,7 @@ func TestHandleApproveNew_EphemeralConfirmation(t *testing.T) {
 		api := &plugintest.API{}
 		plugin := &Plugin{}
 		plugin.SetAPI(api)
+		plugin.botUserID = "bot123" // Set bot user ID for notification
 
 		requester := &model.User{
 			Id:       "req555",
@@ -260,6 +294,12 @@ func TestHandleApproveNew_EphemeralConfirmation(t *testing.T) {
 			return len(key) > 10 && (key[:16] == "approval:record:" || key[:14] == "approval_code:")
 		}), mock.Anything).Return(nil)
 
+		// Story 2.1: Mock notification DM calls
+		api.On("GetDirectChannel", "bot123", "app666").Return(&model.Channel{Id: "dm_channel"}, nil)
+		api.On("CreatePost", mock.MatchedBy(func(post *model.Post) bool {
+			return post.UserId == "bot123" && post.ChannelId == "dm_channel"
+		})).Return(&model.Post{}, nil)
+
 		// Capture the actual message sent
 		var actualMessage string
 		api.On("SendEphemeralPost", "req555", mock.Anything).Run(func(args mock.Arguments) {
@@ -269,6 +309,7 @@ func TestHandleApproveNew_EphemeralConfirmation(t *testing.T) {
 
 		api.On("LogInfo", mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything).Maybe()
 		api.On("LogError", mock.Anything, mock.Anything, mock.Anything).Maybe()
+		api.On("LogWarn", mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything).Maybe()
 
 		payload := &model.SubmitDialogRequest{
 			UserId:     "req555",
@@ -309,6 +350,7 @@ func TestHandleApproveNew_Performance(t *testing.T) {
 		api := &plugintest.API{}
 		plugin := &Plugin{}
 		plugin.SetAPI(api)
+		plugin.botUserID = "bot123" // Set bot user ID for notification
 
 		requester := &model.User{
 			Id:       "perf123",
@@ -332,9 +374,17 @@ func TestHandleApproveNew_Performance(t *testing.T) {
 		api.On("KVSet", mock.MatchedBy(func(key string) bool {
 			return len(key) > 10 && (key[:16] == "approval:record:" || key[:14] == "approval_code:")
 		}), mock.Anything).Return(nil)
+
+		// Story 2.1: Mock notification DM calls
+		api.On("GetDirectChannel", "bot123", "perf456").Return(&model.Channel{Id: "dm_channel"}, nil)
+		api.On("CreatePost", mock.MatchedBy(func(post *model.Post) bool {
+			return post.UserId == "bot123" && post.ChannelId == "dm_channel"
+		})).Return(&model.Post{}, nil)
+
 		api.On("SendEphemeralPost", "perf123", mock.Anything).Return(&model.Post{})
 		api.On("LogInfo", mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything).Maybe()
 		api.On("LogError", mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything).Maybe()
+		api.On("LogWarn", mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything).Maybe()
 
 		payload := &model.SubmitDialogRequest{
 			UserId:     "perf123",
@@ -379,6 +429,7 @@ func TestHandleApproveNew_IntegrationFlow(t *testing.T) {
 		api := &plugintest.API{}
 		plugin := &Plugin{}
 		plugin.SetAPI(api)
+		plugin.botUserID = "bot123" // Set bot user ID for notification
 
 		// AC4: Mattermost authentication - user identity from authenticated session
 		requester := &model.User{
@@ -416,6 +467,12 @@ func TestHandleApproveNew_IntegrationFlow(t *testing.T) {
 			return len(key) > 14 && key[:14] == "approval_code:"
 		}), mock.Anything).Return(nil)
 
+		// Story 2.1: Mock notification DM calls
+		api.On("GetDirectChannel", "bot123", "integration-approver").Return(&model.Channel{Id: "dm_channel"}, nil)
+		api.On("CreatePost", mock.MatchedBy(func(post *model.Post) bool {
+			return post.UserId == "bot123" && post.ChannelId == "dm_channel"
+		})).Return(&model.Post{}, nil)
+
 		// AC2: Capture ephemeral post to verify message format
 		var capturedPost *model.Post
 		var capturedUserID string
@@ -428,6 +485,7 @@ func TestHandleApproveNew_IntegrationFlow(t *testing.T) {
 		api.On("LogInfo", mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything).Maybe()
 		api.On("LogError", mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything).Maybe()
 		api.On("LogError", mock.Anything, mock.Anything, mock.Anything).Maybe()
+		api.On("LogWarn", mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything).Maybe()
 
 		// Create dialog submission payload
 		payload := &model.SubmitDialogRequest{
@@ -510,6 +568,7 @@ func TestHandleApproveNew_IntegrationFlow(t *testing.T) {
 		api := &plugintest.API{}
 		plugin := &Plugin{}
 		plugin.SetAPI(api)
+		plugin.botUserID = "bot123" // Set bot user ID for notification
 
 		requester := &model.User{
 			Id:       "req-fail-test",
@@ -542,15 +601,25 @@ func TestHandleApproveNew_IntegrationFlow(t *testing.T) {
 			return len(key) > 14 && key[:14] == "approval_code:"
 		}), mock.Anything).Return(nil)
 
+		// Story 2.1: Mock notification DM calls
+		api.On("GetDirectChannel", "bot123", "app-fail-test").Return(&model.Channel{Id: "dm_channel"}, nil)
+		api.On("CreatePost", mock.MatchedBy(func(post *model.Post) bool {
+			return post.UserId == "bot123" && post.ChannelId == "dm_channel"
+		})).Return(&model.Post{}, nil)
+
 		// Mock SendEphemeralPost FAILURE (returns nil) - triggers fallback to CreatePost
 		api.On("SendEphemeralPost", "req-fail-test", mock.Anything).Return(nil)
 
-		// Mock fallback CreatePost (AC3: generic success indicator)
-		api.On("CreatePost", mock.Anything).Return(&model.Post{}, nil)
+		// Mock fallback CreatePost for ephemeral failure (AC3: generic success indicator)
+		api.On("CreatePost", mock.MatchedBy(func(post *model.Post) bool {
+			// This is the fallback confirmation post, not the DM notification
+			return post.UserId == "req-fail-test"
+		})).Return(&model.Post{}, nil)
 
 		// Mock logging (should log the confirmation failure and fallback attempt)
 		api.On("LogInfo", mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything).Maybe()
 		api.On("LogError", mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything).Maybe()
+		api.On("LogWarn", mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything).Maybe()
 
 		payload := &model.SubmitDialogRequest{
 			UserId:     "req-fail-test",
@@ -600,7 +669,8 @@ func TestHandleCancelCommand_Integration(t *testing.T) {
 		// Setup
 		api := &plugintest.API{}
 
-		// Mock plugin registration
+		// Mock plugin activation
+		api.On("EnsureBotUser", mock.AnythingOfType("*model.Bot")).Return("bot123", nil)
 		api.On("RegisterCommand", mock.AnythingOfType("*model.Command")).Return(nil)
 
 		// Scenario 1: Create an approval record that will be canceled
@@ -685,7 +755,8 @@ func TestHandleCancelCommand_Integration(t *testing.T) {
 
 		api := &plugintest.API{}
 
-		// Mock plugin registration
+		// Mock plugin activation
+		api.On("EnsureBotUser", mock.AnythingOfType("*model.Bot")).Return("bot123", nil)
 		api.On("RegisterCommand", mock.AnythingOfType("*model.Command")).Return(nil)
 
 		// Record already canceled
@@ -734,7 +805,8 @@ func TestHandleCancelCommand_Integration(t *testing.T) {
 
 		api := &plugintest.API{}
 
-		// Mock plugin registration
+		// Mock plugin activation
+		api.On("EnsureBotUser", mock.AnythingOfType("*model.Bot")).Return("bot123", nil)
 		api.On("RegisterCommand", mock.AnythingOfType("*model.Command")).Return(nil)
 
 		// Record owned by alice123
@@ -787,7 +859,8 @@ func TestHandleCancelCommand_Performance(t *testing.T) {
 
 		api := &plugintest.API{}
 
-		// Mock plugin registration
+		// Mock plugin activation
+		api.On("EnsureBotUser", mock.AnythingOfType("*model.Bot")).Return("bot123", nil)
 		api.On("RegisterCommand", mock.AnythingOfType("*model.Command")).Return(nil)
 
 		// Setup test record

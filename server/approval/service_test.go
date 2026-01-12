@@ -31,16 +31,16 @@ func (m *MockApprovalStore) SaveApproval(record *ApprovalRecord) error {
 
 func TestCancelApproval(t *testing.T) {
 	tests := []struct {
-		name            string
-		approvalCode    string
-		requesterID     string
-		existingRecord  *ApprovalRecord
-		getByCodeErr    error
-		saveErr         error
-		wantErr         bool
-		errContains     string
-		wantStatus      string
-		wantDecidedAt   bool // true if DecidedAt should be set (>0)
+		name           string
+		approvalCode   string
+		requesterID    string
+		existingRecord *ApprovalRecord
+		getByCodeErr   error
+		saveErr        error
+		wantErr        bool
+		errContains    string
+		wantStatus     string
+		wantDecidedAt  bool // true if DecidedAt should be set (>0)
 	}{
 		{
 			name:         "successful cancellation by requester",

@@ -12,8 +12,9 @@ import (
 func TestOnActivate(t *testing.T) {
 	t.Run("successfully registers command and initializes store", func(t *testing.T) {
 		api := &plugintest.API{}
+		api.On("EnsureBotUser", mock.AnythingOfType("*model.Bot")).Return("bot123", nil)
 		api.On("RegisterCommand", mock.AnythingOfType("*model.Command")).Return(nil)
-		api.On("LogInfo", mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return()
+		api.On("LogInfo", mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return()
 
 		p := &Plugin{}
 		p.SetAPI(api)
@@ -21,13 +22,15 @@ func TestOnActivate(t *testing.T) {
 		err := p.OnActivate()
 		assert.NoError(t, err)
 		assert.NotNil(t, p.store, "store should be initialized")
+		assert.Equal(t, "bot123", p.botUserID, "bot user ID should be initialized")
 		api.AssertExpectations(t)
 	})
 
 	t.Run("handles registration failure", func(t *testing.T) {
 		api := &plugintest.API{}
+		api.On("EnsureBotUser", mock.AnythingOfType("*model.Bot")).Return("bot123", nil)
 		api.On("RegisterCommand", mock.AnythingOfType("*model.Command")).Return(model.NewAppError("test", "test.error", nil, "", 500))
-		api.On("LogInfo", mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return()
+		api.On("LogInfo", mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return()
 
 		p := &Plugin{}
 		p.SetAPI(api)
@@ -35,6 +38,19 @@ func TestOnActivate(t *testing.T) {
 		err := p.OnActivate()
 		assert.Error(t, err)
 		assert.Contains(t, err.Error(), "failed to register slash command")
+	})
+
+	t.Run("handles bot user creation failure", func(t *testing.T) {
+		api := &plugintest.API{}
+		api.On("EnsureBotUser", mock.AnythingOfType("*model.Bot")).Return("", &model.AppError{Message: "bot creation failed"})
+		api.On("LogInfo", mock.Anything, mock.Anything).Return()
+
+		p := &Plugin{}
+		p.SetAPI(api)
+
+		err := p.OnActivate()
+		assert.Error(t, err)
+		assert.Contains(t, err.Error(), "failed to ensure bot user")
 	})
 }
 
@@ -112,7 +128,8 @@ func TestHandleCancelCommand(t *testing.T) {
 	t.Run("successful cancellation shows confirmation", func(t *testing.T) {
 		api := &plugintest.API{}
 
-		// Mock plugin registration
+		// Mock plugin activation
+		api.On("EnsureBotUser", mock.AnythingOfType("*model.Bot")).Return("bot123", nil)
 		api.On("RegisterCommand", mock.AnythingOfType("*model.Command")).Return(nil)
 
 		// Mock KV store operations for GetByCode
@@ -165,7 +182,8 @@ func TestHandleCancelCommand(t *testing.T) {
 	t.Run("permission denied for different user", func(t *testing.T) {
 		api := &plugintest.API{}
 
-		// Mock plugin registration
+		// Mock plugin activation
+		api.On("EnsureBotUser", mock.AnythingOfType("*model.Bot")).Return("bot123", nil)
 		api.On("RegisterCommand", mock.AnythingOfType("*model.Command")).Return(nil)
 
 		// Mock KV store operations
@@ -210,7 +228,8 @@ func TestHandleCancelCommand(t *testing.T) {
 	t.Run("cannot cancel approved approval", func(t *testing.T) {
 		api := &plugintest.API{}
 
-		// Mock plugin registration
+		// Mock plugin activation
+		api.On("EnsureBotUser", mock.AnythingOfType("*model.Bot")).Return("bot123", nil)
 		api.On("RegisterCommand", mock.AnythingOfType("*model.Command")).Return(nil)
 
 		// Mock KV store operations
@@ -255,7 +274,8 @@ func TestHandleCancelCommand(t *testing.T) {
 	t.Run("approval not found shows error", func(t *testing.T) {
 		api := &plugintest.API{}
 
-		// Mock plugin registration
+		// Mock plugin activation
+		api.On("EnsureBotUser", mock.AnythingOfType("*model.Bot")).Return("bot123", nil)
 		api.On("RegisterCommand", mock.AnythingOfType("*model.Command")).Return(nil)
 
 		// Mock KV store operations - code not found
@@ -289,7 +309,8 @@ func TestHandleCancelCommand(t *testing.T) {
 	t.Run("ephemeral post fallback works", func(t *testing.T) {
 		api := &plugintest.API{}
 
-		// Mock plugin registration
+		// Mock plugin activation
+		api.On("EnsureBotUser", mock.AnythingOfType("*model.Bot")).Return("bot123", nil)
 		api.On("RegisterCommand", mock.AnythingOfType("*model.Command")).Return(nil)
 
 		// Mock KV store operations
@@ -364,7 +385,8 @@ func TestHandleCancelCommand(t *testing.T) {
 	t.Run("invalid code format shows error", func(t *testing.T) {
 		api := &plugintest.API{}
 
-		// Mock plugin registration
+		// Mock plugin activation
+		api.On("EnsureBotUser", mock.AnythingOfType("*model.Bot")).Return("bot123", nil)
 		api.On("RegisterCommand", mock.AnythingOfType("*model.Command")).Return(nil)
 
 		// Mock logging

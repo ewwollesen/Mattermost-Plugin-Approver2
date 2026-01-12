@@ -9,6 +9,7 @@ import (
 	"github.com/gorilla/mux"
 	"github.com/mattermost/mattermost-plugin-approver2/server/approval"
 	"github.com/mattermost/mattermost-plugin-approver2/server/command"
+	"github.com/mattermost/mattermost-plugin-approver2/server/notifications"
 	"github.com/mattermost/mattermost-plugin-approver2/server/store"
 	"github.com/mattermost/mattermost/server/public/model"
 	"github.com/mattermost/mattermost/server/public/plugin"
@@ -198,6 +199,30 @@ func (p *Plugin) handleApproveNew(payload *model.SubmitDialogRequest) *model.Sub
 		// AC5: User-friendly message for KV store failures
 		return &model.SubmitDialogResponse{
 			Error: "Failed to create approval request. The system is temporarily unavailable. Please try again.",
+		}
+	}
+
+	// Story 2.1: Send DM notification to approver (best effort, graceful degradation)
+	if err := notifications.SendApprovalRequestDM(p.API, p.botUserID, record); err != nil {
+		// Log warning but continue - approval record already saved (data integrity priority)
+		p.API.LogWarn("DM notification failed but approval created",
+			"approval_id", record.ID,
+			"code", record.Code,
+			"approver_id", record.ApproverID,
+			"requester_id", record.RequesterID,
+			"error", err.Error(),
+		)
+		// NotificationSent flag remains false (default value)
+	} else {
+		// Notification sent successfully - update flag (best effort)
+		record.NotificationSent = true
+		if err := kvStore.SaveApproval(record); err != nil {
+			// Log warning but don't fail - notification already sent
+			p.API.LogWarn("Failed to update NotificationSent flag",
+				"approval_id", record.ID,
+				"code", record.Code,
+				"error", err.Error(),
+			)
 		}
 	}
 

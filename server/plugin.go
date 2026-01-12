@@ -28,11 +28,25 @@ type Plugin struct {
 
 	// service provides approval business logic
 	service *approval.Service
+
+	// botUserID is the ID of the bot user for sending notifications
+	botUserID string
 }
 
 // OnActivate is called when the plugin is activated.
 func (p *Plugin) OnActivate() error {
 	p.API.LogInfo("Activating Mattermost Approval Workflow plugin")
+
+	// Ensure bot user exists and get bot ID
+	botID, appErr := p.API.EnsureBotUser(&model.Bot{
+		Username:    "approvalbot",
+		DisplayName: "Approval Bot",
+		Description: "Bot for sending approval request notifications",
+	})
+	if appErr != nil {
+		return fmt.Errorf("failed to ensure bot user: %s", appErr.Error())
+	}
+	p.botUserID = botID
 
 	// Initialize store
 	p.store = store.NewKVStore(p.API)
@@ -45,7 +59,7 @@ func (p *Plugin) OnActivate() error {
 		return fmt.Errorf("failed to register slash command: %w", err)
 	}
 
-	p.API.LogInfo("Mattermost Approval Workflow plugin activated successfully")
+	p.API.LogInfo("Mattermost Approval Workflow plugin activated successfully", "bot_user_id", botID)
 	return nil
 }
 
@@ -189,14 +203,16 @@ func (p *Plugin) formatCancelError(err error, code string) string {
 		return "❌ Permission denied. You can only cancel your own approval requests."
 	case strings.Contains(errorStr, "cannot cancel"):
 		// Extract status from error message if present
-		if strings.Contains(errorStr, "approved") {
+		switch {
+		case strings.Contains(errorStr, "approved"):
 			return fmt.Sprintf("❌ Cannot cancel approval request %s. Status is already approved.", code)
-		} else if strings.Contains(errorStr, "denied") {
+		case strings.Contains(errorStr, "denied"):
 			return fmt.Sprintf("❌ Cannot cancel approval request %s. Status is already denied.", code)
-		} else if strings.Contains(errorStr, "canceled") {
+		case strings.Contains(errorStr, "canceled"):
 			return fmt.Sprintf("❌ Cannot cancel approval request %s. Status is already canceled.", code)
+		default:
+			return fmt.Sprintf("❌ Cannot cancel approval request %s. Request has already been decided.", code)
 		}
-		return fmt.Sprintf("❌ Cannot cancel approval request %s. Request has already been decided.", code)
 	default:
 		return "❌ Failed to cancel approval request. Please try again."
 	}
