@@ -13,3 +13,12 @@ server/plugin-approver2
 
 # VS Code
 .vscode
+
+# BMAD workflow framework (not project deliverables)
+_bmad/
+
+# Claude Code personal settings
+.claude/
+
+# macOS
+.DS_Store
