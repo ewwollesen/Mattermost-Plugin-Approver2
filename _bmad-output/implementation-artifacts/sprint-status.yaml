@@ -54,7 +54,7 @@ development_status:
   # Epic 2: Approval Decision Processing
   epic-2: in-progress
   2-1-send-dm-notification-to-approver: done
-  2-2-display-approval-request-with-interactive-buttons: review
+  2-2-display-approval-request-with-interactive-buttons: done
   2-3-handle-approve-deny-button-interactions: backlog
   2-4-record-approval-decision-immutably: backlog
   2-5-send-outcome-notification-to-requester: backlog
