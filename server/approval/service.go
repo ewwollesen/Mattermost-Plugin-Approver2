@@ -14,6 +14,7 @@ var approvalCodePattern = regexp.MustCompile(`^[A-Z]-[A-Z0-9]{6}$`)
 
 // ApprovalStore defines the interface for approval record persistence
 type ApprovalStore interface {
+	GetApproval(id string) (*ApprovalRecord, error)
 	GetByCode(code string) (*ApprovalRecord, error)
 	SaveApproval(record *ApprovalRecord) error
 }
@@ -83,28 +84,120 @@ func (s *Service) CancelApproval(approvalCode, requesterID string) error {
 	return nil
 }
 
-// RecordDecision records an approval decision (approve or deny)
-// Story 2.4 integration point - stub implementation for Story 2.3
+// RecordDecision records an approval decision (approve or deny) with immutability guarantees.
+// This method enforces:
+// - Authorization: Only the designated approver can record a decision
+// - Immutability: Decisions can only be recorded on pending approvals
+// - Atomicity: All field updates happen atomically via KV store
+// - Concurrency Safety: Uses optimistic locking via KVStore to prevent race conditions
+//
+// Performance: Completes within 2 seconds (NFR-P2). Timing is measured and logged.
+//
+// Returns:
+// - ErrRecordNotFound if approval doesn't exist
+// - ErrRecordImmutable if approval is not pending
+// - error with "permission denied" if approver doesn't match
+// - error for validation failures
 func (s *Service) RecordDecision(approvalID, approverID, decision, comment string) error {
-	// Validation
+	// Performance tracking (NFR-P2: must complete within 2 seconds)
+	startTime := model.GetMillis()
+
+	// Validation: trim whitespace and check required fields
+	approvalID = strings.TrimSpace(approvalID)
 	if approvalID == "" {
 		return fmt.Errorf("approval ID is required")
 	}
+
+	approverID = strings.TrimSpace(approverID)
 	if approverID == "" {
 		return fmt.Errorf("approver ID is required")
 	}
+
+	// Validate decision value
 	if decision != "approved" && decision != "denied" {
 		return fmt.Errorf("invalid decision: must be 'approved' or 'denied'")
 	}
 
-	// TODO Story 2.4: Implement full decision recording logic
-	// For now, return success to allow Story 2.3 to complete
-	// Full implementation will:
-	// - Retrieve approval record
-	// - Verify approver matches
-	// - Verify status is pending
-	// - Update status, decision comment, decided timestamp
-	// - Save record immutably
+	// Trim comment (can be empty string)
+	comment = strings.TrimSpace(comment)
+
+	// Retrieve approval record by ID
+	record, err := s.store.GetApproval(approvalID)
+	if err != nil {
+		// Wrap error with context (preserves ErrRecordNotFound if present)
+		return fmt.Errorf("failed to retrieve approval %s: %w", approvalID, err)
+	}
+
+	// Defensive nil check (should not happen with current KVStore implementation)
+	if record == nil {
+		return fmt.Errorf("approval record %s is nil after retrieval", approvalID)
+	}
+
+	// Authorization check: verify authenticated user is the designated approver
+	if record.ApproverID != approverID {
+		s.api.LogError("Unauthorized decision attempt",
+			"approval_id", approvalID,
+			"authenticated_user", approverID,
+			"designated_approver", record.ApproverID,
+		)
+		return fmt.Errorf("permission denied: only the designated approver can make this decision")
+	}
+
+	// Immutability check: only pending approvals can be decided
+	if record.Status != StatusPending {
+		s.api.LogError("Attempted to modify finalized approval",
+			"approval_id", approvalID,
+			"current_status", record.Status,
+			"attempted_action", decision,
+		)
+		return fmt.Errorf("cannot modify approval with status %s: %w", record.Status, ErrRecordImmutable)
+	}
+
+	// Map decision string to status constant
+	var newStatus string
+	if decision == "approved" {
+		newStatus = StatusApproved
+	} else {
+		newStatus = StatusDenied
+	}
+
+	// Update record fields atomically (in-memory, persisted atomically in SaveApproval)
+	record.Status = newStatus
+	record.DecisionComment = comment
+	record.DecidedAt = model.GetMillis()
+
+	// Persist updated record with defense-in-depth immutability check
+	// KVStore re-checks status != pending before write (kvstore.go:33-40),
+	// providing protection against race conditions via optimistic locking
+	if err := s.store.SaveApproval(record); err != nil {
+		return fmt.Errorf("failed to save decision for approval %s: %w", approvalID, err)
+	}
+
+	// Calculate operation duration for performance monitoring (NFR-P2)
+	duration := model.GetMillis() - startTime
+
+	// Log successful decision recording
+	s.api.LogInfo("Approval decision recorded",
+		"approval_id", approvalID,
+		"code", record.Code,
+		"decision", decision,
+		"approver_id", approverID,
+	)
+
+	// Separately log performance metrics for monitoring
+	s.api.LogDebug("RecordDecision performance",
+		"approval_id", approvalID,
+		"duration_ms", duration,
+	)
+
+	// Warn if operation exceeds performance budget (2000ms = NFR-P2)
+	if duration > 2000 {
+		s.api.LogWarn("RecordDecision exceeded performance budget",
+			"approval_id", approvalID,
+			"duration_ms", duration,
+			"budget_ms", 2000,
+		)
+	}
 
 	return nil
 }

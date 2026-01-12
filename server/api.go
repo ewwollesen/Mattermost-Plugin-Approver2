@@ -476,7 +476,7 @@ func (p *Plugin) handleConfirmDecision(payload *model.SubmitDialogRequest) *mode
 		}
 	}
 
-	// Record decision (Story 2.4 integration point - currently stubbed)
+	// Record decision (Story 2.4 integration point)
 	decision := "approved"
 	if action == "deny" {
 		decision = "denied"

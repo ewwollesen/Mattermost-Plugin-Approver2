@@ -16,6 +16,14 @@ type MockApprovalStore struct {
 	mock.Mock
 }
 
+func (m *MockApprovalStore) GetApproval(id string) (*ApprovalRecord, error) {
+	args := m.Called(id)
+	if args.Get(0) == nil {
+		return nil, args.Error(1)
+	}
+	return args.Get(0).(*ApprovalRecord), args.Error(1)
+}
+
 func (m *MockApprovalStore) GetByCode(code string) (*ApprovalRecord, error) {
 	args := m.Called(code)
 	if args.Get(0) == nil {
@@ -370,3 +378,4 @@ func TestCancelApproval_CorruptedIndex(t *testing.T) {
 
 	mockStore.AssertExpectations(t)
 }
+
