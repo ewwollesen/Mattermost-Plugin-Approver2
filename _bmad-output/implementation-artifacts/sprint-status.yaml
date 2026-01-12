@@ -49,12 +49,12 @@ development_status:
   1-5-request-validation-error-handling: done
   1-6-request-submission-immediate-confirmation: done
   1-7-cancel-pending-approval-requests: done
-  epic-1-retrospective: optional
+  epic-1-retrospective: done
 
   # Epic 2: Approval Decision Processing
-  epic-2: backlog
-  2-1-send-dm-notification-to-approver: backlog
-  2-2-display-approval-request-with-interactive-buttons: backlog
+  epic-2: in-progress
+  2-1-send-dm-notification-to-approver: done
+  2-2-display-approval-request-with-interactive-buttons: review
   2-3-handle-approve-deny-button-interactions: backlog
   2-4-record-approval-decision-immutably: backlog
   2-5-send-outcome-notification-to-requester: backlog
