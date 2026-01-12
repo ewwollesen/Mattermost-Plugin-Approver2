@@ -2,6 +2,8 @@ bin/
 dist/
 webapp/src/manifest.ts
 server/manifest.go
+server/server
+server/plugin-approver2
 
 # Mac
 .DS_Store

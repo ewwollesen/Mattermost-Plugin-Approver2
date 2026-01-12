@@ -29,7 +29,7 @@ func TestSendApprovalRequestDM(t *testing.T) {
 				strings.Contains(post.Message, "@alice (Alice Carter)") &&
 				strings.Contains(post.Message, "Deploy hotfix to production") &&
 				strings.Contains(post.Message, "A-X7K9Q2")
-		})).Return(&model.Post{}, nil)
+		})).Return(&model.Post{Id: "post_123"}, nil)
 
 		// Create test approval record
 		record := &approval.ApprovalRecord{
@@ -43,7 +43,7 @@ func TestSendApprovalRequestDM(t *testing.T) {
 		}
 
 		// Execute
-		err := SendApprovalRequestDM(api, botUserID, record)
+		_, err := SendApprovalRequestDM(api, botUserID, record)
 
 		// Assert
 		assert.NoError(t, err)
@@ -61,7 +61,7 @@ func TestSendApprovalRequestDM(t *testing.T) {
 		api.On("CreatePost", mock.MatchedBy(func(post *model.Post) bool {
 			capturedMessage = post.Message
 			return true
-		})).Return(&model.Post{}, nil)
+		})).Return(&model.Post{Id: "post_123"}, nil)
 
 		record := &approval.ApprovalRecord{
 			ID:                   "record123",
@@ -73,7 +73,7 @@ func TestSendApprovalRequestDM(t *testing.T) {
 			CreatedAt:            1704988800000, // 2024-01-11 12:00:00 UTC
 		}
 
-		err := SendApprovalRequestDM(api, botUserID, record)
+		_, err := SendApprovalRequestDM(api, botUserID, record)
 		assert.NoError(t, err)
 
 		// Verify exact format
@@ -96,7 +96,7 @@ func TestSendApprovalRequestDM(t *testing.T) {
 		api.On("CreatePost", mock.MatchedBy(func(post *model.Post) bool {
 			capturedMessage = post.Message
 			return true
-		})).Return(&model.Post{}, nil)
+		})).Return(&model.Post{Id: "post_123"}, nil)
 
 		record := &approval.ApprovalRecord{
 			ID:                   "record123",
@@ -108,7 +108,7 @@ func TestSendApprovalRequestDM(t *testing.T) {
 			CreatedAt:            1704988800000, // 2024-01-11 12:00:00 UTC
 		}
 
-		err := SendApprovalRequestDM(api, botUserID, record)
+		_, err := SendApprovalRequestDM(api, botUserID, record)
 		assert.NoError(t, err)
 
 		// Verify timestamp format: YYYY-MM-DD HH:MM:SS UTC
@@ -137,7 +137,7 @@ func TestSendApprovalRequestDM(t *testing.T) {
 		}
 
 		// Execute - should return error
-		err := SendApprovalRequestDM(api, botUserID, record)
+		_, err := SendApprovalRequestDM(api, botUserID, record)
 
 		// Assert error is returned for caller to log
 		assert.Error(t, err)
@@ -163,7 +163,7 @@ func TestSendApprovalRequestDM(t *testing.T) {
 		}
 
 		// Execute - should return error for DM channel creation failure
-		err := SendApprovalRequestDM(api, botUserID, record)
+		_, err := SendApprovalRequestDM(api, botUserID, record)
 
 		// Assert error is returned
 		assert.Error(t, err)
@@ -185,7 +185,7 @@ func TestSendApprovalRequestDM(t *testing.T) {
 		}
 
 		// Execute - should return error for empty bot user ID
-		err := SendApprovalRequestDM(api, "", record)
+		_, err := SendApprovalRequestDM(api, "", record)
 
 		// Assert error is returned
 		assert.Error(t, err)
@@ -197,7 +197,7 @@ func TestSendApprovalRequestDM(t *testing.T) {
 		api := &plugintest.API{}
 
 		// Execute - should return error for nil record
-		err := SendApprovalRequestDM(api, "bot123", nil)
+		_, err := SendApprovalRequestDM(api, "bot123", nil)
 
 		// Assert error is returned
 		assert.Error(t, err)
@@ -219,7 +219,7 @@ func TestSendApprovalRequestDM(t *testing.T) {
 		}
 
 		// Execute - should return error for empty record ID
-		err := SendApprovalRequestDM(api, "bot123", record)
+		_, err := SendApprovalRequestDM(api, "bot123", record)
 
 		// Assert error is returned
 		assert.Error(t, err)
@@ -273,7 +273,7 @@ func TestSendApprovalRequestDM_WithActionButtons(t *testing.T) {
 		api.On("CreatePost", mock.MatchedBy(func(post *model.Post) bool {
 			capturedPost = post
 			return true
-		})).Return(&model.Post{}, nil)
+		})).Return(&model.Post{Id: "post_123"}, nil)
 
 		// Create test approval record
 		record := &approval.ApprovalRecord{
@@ -287,7 +287,7 @@ func TestSendApprovalRequestDM_WithActionButtons(t *testing.T) {
 		}
 
 		// Execute
-		err := SendApprovalRequestDM(api, botUserID, record)
+		_, err := SendApprovalRequestDM(api, botUserID, record)
 
 		// Assert no error
 		assert.NoError(t, err)
@@ -315,7 +315,7 @@ func TestSendApprovalRequestDM_WithActionButtons(t *testing.T) {
 		api.On("CreatePost", mock.MatchedBy(func(post *model.Post) bool {
 			capturedPost = post
 			return true
-		})).Return(&model.Post{}, nil)
+		})).Return(&model.Post{Id: "post_123"}, nil)
 
 		record := &approval.ApprovalRecord{
 			ID:                   "record123",
@@ -327,7 +327,7 @@ func TestSendApprovalRequestDM_WithActionButtons(t *testing.T) {
 			CreatedAt:            1704988800000,
 		}
 
-		err := SendApprovalRequestDM(api, botUserID, record)
+		_, err := SendApprovalRequestDM(api, botUserID, record)
 		assert.NoError(t, err)
 
 		// Extract approve button
@@ -336,8 +336,7 @@ func TestSendApprovalRequestDM_WithActionButtons(t *testing.T) {
 		actions := attachment["actions"].([]any)
 		approveButton := actions[0].(map[string]any)
 
-		// Verify approve button properties
-		assert.Equal(t, "approve_record123", approveButton["id"])
+		// Verify approve button properties (no ID - using custom integration URL)
 		assert.Equal(t, "Approve", approveButton["name"])
 		assert.Equal(t, "primary", approveButton["style"])
 
@@ -362,7 +361,7 @@ func TestSendApprovalRequestDM_WithActionButtons(t *testing.T) {
 		api.On("CreatePost", mock.MatchedBy(func(post *model.Post) bool {
 			capturedPost = post
 			return true
-		})).Return(&model.Post{}, nil)
+		})).Return(&model.Post{Id: "post_123"}, nil)
 
 		record := &approval.ApprovalRecord{
 			ID:                   "record123",
@@ -374,7 +373,7 @@ func TestSendApprovalRequestDM_WithActionButtons(t *testing.T) {
 			CreatedAt:            1704988800000,
 		}
 
-		err := SendApprovalRequestDM(api, botUserID, record)
+		_, err := SendApprovalRequestDM(api, botUserID, record)
 		assert.NoError(t, err)
 
 		// Extract deny button
@@ -383,8 +382,7 @@ func TestSendApprovalRequestDM_WithActionButtons(t *testing.T) {
 		actions := attachment["actions"].([]any)
 		denyButton := actions[1].(map[string]any)
 
-		// Verify deny button properties
-		assert.Equal(t, "deny_record123", denyButton["id"])
+		// Verify deny button properties (no ID - using custom integration URL)
 		assert.Equal(t, "Deny", denyButton["name"])
 		assert.Equal(t, "danger", denyButton["style"])
 
@@ -409,7 +407,7 @@ func TestSendApprovalRequestDM_WithActionButtons(t *testing.T) {
 		api.On("CreatePost", mock.MatchedBy(func(post *model.Post) bool {
 			capturedPost = post
 			return true
-		})).Return(&model.Post{}, nil)
+		})).Return(&model.Post{Id: "post_123"}, nil)
 
 		record := &approval.ApprovalRecord{
 			ID:                   "record123",
@@ -421,7 +419,7 @@ func TestSendApprovalRequestDM_WithActionButtons(t *testing.T) {
 			CreatedAt:            1704988800000,
 		}
 
-		err := SendApprovalRequestDM(api, botUserID, record)
+		_, err := SendApprovalRequestDM(api, botUserID, record)
 		assert.NoError(t, err)
 
 		// Verify message content is unchanged
@@ -448,7 +446,7 @@ func TestSendApprovalRequestDM_WithActionButtons(t *testing.T) {
 		api.On("CreatePost", mock.MatchedBy(func(post *model.Post) bool {
 			capturedPost = post
 			return true
-		})).Return(&model.Post{}, nil)
+		})).Return(&model.Post{Id: "post_123"}, nil)
 
 		// Create description close to 1000 chars
 		longDescription := strings.Repeat("This is a very detailed approval request description that spans multiple lines and contains important information. ", 10)
@@ -463,7 +461,7 @@ func TestSendApprovalRequestDM_WithActionButtons(t *testing.T) {
 			CreatedAt:            1704988800000,
 		}
 
-		err := SendApprovalRequestDM(api, botUserID, record)
+		_, err := SendApprovalRequestDM(api, botUserID, record)
 		assert.NoError(t, err)
 
 		// Verify buttons still present with long description
@@ -478,7 +476,7 @@ func TestSendApprovalRequestDM_WithActionButtons(t *testing.T) {
 		assert.Contains(t, capturedPost.Message, longDescription)
 	})
 
-	t.Run("button IDs are unique per approval", func(t *testing.T) {
+	t.Run("approval context is unique per approval", func(t *testing.T) {
 		api := &plugintest.API{}
 		botUserID := "bot123"
 		approverID := "approver456"
@@ -495,7 +493,7 @@ func TestSendApprovalRequestDM_WithActionButtons(t *testing.T) {
 				post2 = post
 			}
 			return true
-		})).Return(&model.Post{}, nil).Twice()
+		})).Return(&model.Post{Id: "post_123"}, nil).Twice()
 
 		// Create two different approval records
 		record1 := &approval.ApprovalRecord{
@@ -519,13 +517,13 @@ func TestSendApprovalRequestDM_WithActionButtons(t *testing.T) {
 		}
 
 		// Send both notifications
-		err1 := SendApprovalRequestDM(api, botUserID, record1)
-		err2 := SendApprovalRequestDM(api, botUserID, record2)
+		_, err1 := SendApprovalRequestDM(api, botUserID, record1)
+		_, err2 := SendApprovalRequestDM(api, botUserID, record2)
 
 		assert.NoError(t, err1)
 		assert.NoError(t, err2)
 
-		// Extract button IDs from both posts
+		// Extract approval IDs from integration context in both posts
 		attachments1 := post1.Props["attachments"].([]any)
 		attachment1 := attachments1[0].(map[string]any)
 		actions1 := attachment1["actions"].([]any)
@@ -538,15 +536,32 @@ func TestSendApprovalRequestDM_WithActionButtons(t *testing.T) {
 		approveBtn2 := actions2[0].(map[string]any)
 		denyBtn2 := actions2[1].(map[string]any)
 
-		// Verify button IDs are different between approvals
-		assert.NotEqual(t, approveBtn1["id"], approveBtn2["id"], "Approve button IDs should be unique per approval")
-		assert.NotEqual(t, denyBtn1["id"], denyBtn2["id"], "Deny button IDs should be unique per approval")
+		// Extract integration context
+		integration1Approve := approveBtn1["integration"].(map[string]any)
+		context1Approve := integration1Approve["context"].(map[string]any)
+		integration1Deny := denyBtn1["integration"].(map[string]any)
+		context1Deny := integration1Deny["context"].(map[string]any)
 
-		// Verify correct format
-		assert.Equal(t, "approve_record111", approveBtn1["id"])
-		assert.Equal(t, "deny_record111", denyBtn1["id"])
-		assert.Equal(t, "approve_record222", approveBtn2["id"])
-		assert.Equal(t, "deny_record222", denyBtn2["id"])
+		integration2Approve := approveBtn2["integration"].(map[string]any)
+		context2Approve := integration2Approve["context"].(map[string]any)
+		integration2Deny := denyBtn2["integration"].(map[string]any)
+		context2Deny := integration2Deny["context"].(map[string]any)
+
+		// Verify approval IDs in context are different between approvals
+		assert.NotEqual(t, context1Approve["approval_id"], context2Approve["approval_id"], "Approval IDs should be unique per approval")
+		assert.NotEqual(t, context1Deny["approval_id"], context2Deny["approval_id"], "Approval IDs should be unique per approval")
+
+		// Verify correct approval IDs
+		assert.Equal(t, "record111", context1Approve["approval_id"])
+		assert.Equal(t, "record111", context1Deny["approval_id"])
+		assert.Equal(t, "record222", context2Approve["approval_id"])
+		assert.Equal(t, "record222", context2Deny["approval_id"])
+
+		// Verify actions are correct
+		assert.Equal(t, "approve", context1Approve["action"])
+		assert.Equal(t, "deny", context1Deny["action"])
+		assert.Equal(t, "approve", context2Approve["action"])
+		assert.Equal(t, "deny", context2Deny["action"])
 	})
 }
 

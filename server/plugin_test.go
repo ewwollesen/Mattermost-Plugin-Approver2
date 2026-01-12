@@ -1,8 +1,14 @@
 package main
 
 import (
+	"encoding/json"
+	"fmt"
+	"net/http"
+	"net/http/httptest"
+	"strings"
 	"testing"
 
+	"github.com/mattermost/mattermost-plugin-approver2/server/approval"
 	"github.com/mattermost/mattermost/server/public/model"
 	"github.com/mattermost/mattermost/server/public/plugin/plugintest"
 	"github.com/stretchr/testify/assert"
@@ -413,4 +419,233 @@ func TestHandleCancelCommand(t *testing.T) {
 
 		api.AssertExpectations(t)
 	})
+}
+
+func TestServeHTTP(t *testing.T) {
+	t.Run("routes /action to handleAction", func(t *testing.T) {
+		api := &plugintest.API{}
+		api.On("LogError", mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything).Maybe().Return()
+
+		p := &Plugin{}
+		p.SetAPI(api)
+
+		// Create HTTP request for /action endpoint
+		req := httptest.NewRequest("POST", "/action", strings.NewReader(`{}`))
+		w := httptest.NewRecorder()
+
+		p.ServeHTTP(nil, w, req)
+
+		// Should return 200 or 400 (not 404)
+		assert.NotEqual(t, http.StatusNotFound, w.Code, "should route /action endpoint")
+	})
+
+	t.Run("returns 404 for unknown path", func(t *testing.T) {
+		api := &plugintest.API{}
+		p := &Plugin{}
+		p.SetAPI(api)
+
+		req := httptest.NewRequest("POST", "/unknown", strings.NewReader(`{}`))
+		w := httptest.NewRecorder()
+
+		p.ServeHTTP(nil, w, req)
+
+		assert.Equal(t, http.StatusNotFound, w.Code)
+	})
+}
+
+func TestHandleAction(t *testing.T) {
+	tests := []struct {
+		name           string
+		requestBody    string
+		approvalID     string
+		action         string
+		userID         string
+		approverID     string
+		recordStatus   string
+		setupMocks     func(*plugintest.API, *approval.Service)
+		expectedStatus int
+		expectedError  string
+	}{
+		{
+			name: "approve button opens modal for pending approval",
+			requestBody: `{
+				"user_id": "approver456",
+				"trigger_id": "trigger123",
+				"context": {
+					"approval_id": "record123",
+					"action": "approve"
+				}
+			}`,
+			approvalID:   "record123",
+			action:       "approve",
+			userID:       "approver456",
+			approverID:   "approver456",
+			recordStatus: "pending",
+			setupMocks: func(api *plugintest.API, svc *approval.Service) {
+				api.On("OpenInteractiveDialog", mock.MatchedBy(func(req model.OpenDialogRequest) bool {
+					return req.Dialog.Title == "Confirm Approval" &&
+						strings.Contains(req.Dialog.IntroductionText, "Confirm you are approving:")
+				})).Return(nil)
+			},
+			expectedStatus: http.StatusOK,
+		},
+		{
+			name: "deny button opens modal for pending approval",
+			requestBody: `{
+				"user_id": "approver456",
+				"trigger_id": "trigger123",
+				"context": {
+					"approval_id": "record123",
+					"action": "deny"
+				}
+			}`,
+			approvalID:   "record123",
+			action:       "deny",
+			userID:       "approver456",
+			approverID:   "approver456",
+			recordStatus: "pending",
+			setupMocks: func(api *plugintest.API, svc *approval.Service) {
+				api.On("OpenInteractiveDialog", mock.MatchedBy(func(req model.OpenDialogRequest) bool {
+					return req.Dialog.Title == "Confirm Denial" &&
+						strings.Contains(req.Dialog.IntroductionText, "Confirm you are denying:")
+				})).Return(nil)
+			},
+			expectedStatus: http.StatusOK,
+		},
+		{
+			name: "non-approver rejected with permission denied",
+			requestBody: `{
+				"user_id": "unauthorized789",
+				"trigger_id": "trigger123",
+				"context": {
+					"approval_id": "record123",
+					"action": "approve"
+				}
+			}`,
+			approvalID:     "record123",
+			action:         "approve",
+			userID:         "unauthorized789",
+			approverID:     "approver456",
+			recordStatus:   "pending",
+			expectedStatus: http.StatusBadRequest,
+			expectedError:  "Permission denied",
+		},
+		{
+			name: "already approved request rejected",
+			requestBody: `{
+				"user_id": "approver456",
+				"trigger_id": "trigger123",
+				"context": {
+					"approval_id": "record123",
+					"action": "approve"
+				}
+			}`,
+			approvalID:     "record123",
+			action:         "approve",
+			userID:         "approver456",
+			approverID:     "approver456",
+			recordStatus:   "approved",
+			expectedStatus: http.StatusBadRequest,
+			expectedError:  "Decision already recorded",
+		},
+		{
+			name: "canceled request rejected",
+			requestBody: `{
+				"user_id": "approver456",
+				"trigger_id": "trigger123",
+				"context": {
+					"approval_id": "record123",
+					"action": "approve"
+				}
+			}`,
+			approvalID:     "record123",
+			action:         "approve",
+			userID:         "approver456",
+			approverID:     "approver456",
+			recordStatus:   "canceled",
+			expectedStatus: http.StatusBadRequest,
+			expectedError:  "Decision already recorded",
+		},
+		{
+			name:           "invalid JSON returns error",
+			requestBody:    `{invalid json}`,
+			expectedStatus: http.StatusBadRequest,
+			expectedError:  "Invalid request",
+		},
+		{
+			name: "approval not found returns error",
+			requestBody: `{
+				"user_id": "approver456",
+				"trigger_id": "trigger123",
+				"context": {
+					"approval_id": "notfound",
+					"action": "approve"
+				}
+			}`,
+			approvalID:     "notfound",
+			userID:         "approver456",
+			expectedStatus: http.StatusBadRequest,
+			expectedError:  "Approval not found",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			api := &plugintest.API{}
+			api.On("EnsureBotUser", mock.AnythingOfType("*model.Bot")).Return("bot123", nil)
+			api.On("RegisterCommand", mock.AnythingOfType("*model.Command")).Return(nil)
+			api.On("LogInfo", mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything).Maybe().Return()
+			api.On("LogError", mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything).Maybe().Return()
+
+			// Setup service mocks
+			if tt.approvalID != "" && tt.approvalID != "notfound" {
+				// Mock GetByID for service
+				recordJSON := fmt.Sprintf(`{
+					"id": "%s",
+					"code": "A-X7K9Q2",
+					"requesterId": "requester123",
+					"requesterUsername": "requester",
+					"requesterDisplayName": "Requester User",
+					"approverId": "%s",
+					"approverUsername": "approver",
+					"approverDisplayName": "Approver User",
+					"description": "Test approval request",
+					"status": "%s",
+					"createdAt": 1704931200000,
+					"decidedAt": 0,
+					"schemaVersion": 1
+				}`, tt.approvalID, tt.approverID, tt.recordStatus)
+				api.On("KVGet", fmt.Sprintf("approval:record:%s", tt.approvalID)).Return([]byte(recordJSON), nil)
+			} else if tt.approvalID == "notfound" {
+				api.On("KVGet", fmt.Sprintf("approval:record:%s", tt.approvalID)).Return(nil, nil)
+			}
+
+			// Setup additional mocks if provided
+			if tt.setupMocks != nil {
+				tt.setupMocks(api, nil)
+			}
+
+			p := &Plugin{}
+			p.SetAPI(api)
+			err := p.OnActivate()
+			assert.NoError(t, err)
+
+			// Create HTTP request
+			req := httptest.NewRequest("POST", "/action", strings.NewReader(tt.requestBody))
+			w := httptest.NewRecorder()
+
+			p.ServeHTTP(nil, w, req)
+
+			assert.Equal(t, tt.expectedStatus, w.Code)
+
+			if tt.expectedError != "" {
+				var response model.PostActionIntegrationResponse
+				err := json.NewDecoder(w.Body).Decode(&response)
+				assert.NoError(t, err)
+				assert.Contains(t, response.EphemeralText, tt.expectedError)
+			}
+
+			api.AssertExpectations(t)
+		})
+	}
 }

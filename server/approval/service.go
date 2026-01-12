@@ -82,3 +82,29 @@ func (s *Service) CancelApproval(approvalCode, requesterID string) error {
 
 	return nil
 }
+
+// RecordDecision records an approval decision (approve or deny)
+// Story 2.4 integration point - stub implementation for Story 2.3
+func (s *Service) RecordDecision(approvalID, approverID, decision, comment string) error {
+	// Validation
+	if approvalID == "" {
+		return fmt.Errorf("approval ID is required")
+	}
+	if approverID == "" {
+		return fmt.Errorf("approver ID is required")
+	}
+	if decision != "approved" && decision != "denied" {
+		return fmt.Errorf("invalid decision: must be 'approved' or 'denied'")
+	}
+
+	// TODO Story 2.4: Implement full decision recording logic
+	// For now, return success to allow Story 2.3 to complete
+	// Full implementation will:
+	// - Retrieve approval record
+	// - Verify approver matches
+	// - Verify status is pending
+	// - Update status, decision comment, decided timestamp
+	// - Save record immutably
+
+	return nil
+}

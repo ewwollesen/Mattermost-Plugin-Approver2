@@ -11,23 +11,23 @@ import (
 
 // SendApprovalRequestDM sends a DM notification to the approver when a new approval request is created.
 // The message includes complete context: requester info, timestamp, description, and request ID.
-// Returns error if DM send fails (caller should log and handle gracefully).
-func SendApprovalRequestDM(api plugin.API, botUserID string, record *approval.ApprovalRecord) error {
+// Returns the post ID and error. Error returned if DM send fails (caller should log and handle gracefully).
+func SendApprovalRequestDM(api plugin.API, botUserID string, record *approval.ApprovalRecord) (string, error) {
 	// Validate inputs
 	if botUserID == "" {
-		return fmt.Errorf("bot user ID not available")
+		return "", fmt.Errorf("bot user ID not available")
 	}
 	if record == nil {
-		return fmt.Errorf("approval record is nil")
+		return "", fmt.Errorf("approval record is nil")
 	}
 	if record.ID == "" {
-		return fmt.Errorf("approval record ID is empty")
+		return "", fmt.Errorf("approval record ID is empty")
 	}
 
 	// Get or create DM channel between bot and approver
 	channelID, err := GetDMChannelID(api, botUserID, record.ApproverID)
 	if err != nil {
-		return fmt.Errorf("failed to get DM channel for approver %s: %w", record.ApproverID, err)
+		return "", fmt.Errorf("failed to get DM channel for approver %s: %w", record.ApproverID, err)
 	}
 
 	// Format timestamp as YYYY-MM-DD HH:MM:SS UTC (AC2 requirement)
@@ -57,7 +57,6 @@ func SendApprovalRequestDM(api plugin.API, botUserID string, record *approval.Ap
 					"actions": []any{
 						// Approve button (green/primary style)
 						map[string]any{
-							"id":   "approve_" + record.ID,
 							"name": "Approve",
 							"integration": map[string]any{
 								"url": "/plugins/com.mattermost.plugin-approver2/action",
@@ -70,7 +69,6 @@ func SendApprovalRequestDM(api plugin.API, botUserID string, record *approval.Ap
 						},
 						// Deny button (red/danger style)
 						map[string]any{
-							"id":   "deny_" + record.ID,
 							"name": "Deny",
 							"integration": map[string]any{
 								"url": "/plugins/com.mattermost.plugin-approver2/action",
@@ -88,12 +86,12 @@ func SendApprovalRequestDM(api plugin.API, botUserID string, record *approval.Ap
 	}
 
 	// Send DM via CreatePost (persistent message, not ephemeral)
-	_, appErr := api.CreatePost(post)
+	createdPost, appErr := api.CreatePost(post)
 	if appErr != nil {
-		return fmt.Errorf("failed to send DM to approver %s: %w", record.ApproverID, appErr)
+		return "", fmt.Errorf("failed to send DM to approver %s: %w", record.ApproverID, appErr)
 	}
 
-	return nil
+	return createdPost.Id, nil
 }
 
 // GetDMChannelID gets or creates a DM channel between the bot and the target user.

@@ -36,8 +36,9 @@ type ApprovalRecord struct {
 	TeamID           string `json:"teamId,omitempty"`
 
 	// Delivery tracking flags
-	NotificationSent bool `json:"notificationSent"`
-	OutcomeNotified  bool `json:"outcomeNotified"`
+	NotificationSent   bool   `json:"notificationSent"`
+	NotificationPostID string `json:"notificationPostId,omitempty"` // Post ID of the DM notification with buttons
+	OutcomeNotified    bool   `json:"outcomeNotified"`
 
 	// Schema versioning
 	SchemaVersion int `json:"schemaVersion"`

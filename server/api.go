@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"strings"
 
 	"github.com/gorilla/mux"
 	"github.com/mattermost/mattermost-plugin-approver2/server/approval"
@@ -20,14 +21,15 @@ import (
 func (p *Plugin) ServeHTTP(c *plugin.Context, w http.ResponseWriter, r *http.Request) {
 	router := mux.NewRouter()
 
+	// Button action endpoint (no auth required - authenticated via PostActionIntegrationRequest)
+	router.HandleFunc("/action", p.handleAction).Methods(http.MethodPost)
+
 	// Dialog submission endpoint (no auth required - handled by Mattermost)
 	router.HandleFunc("/dialog/submit", p.handleDialogSubmit).Methods(http.MethodPost)
 
-	// Middleware to require that the user is logged in for API routes
-	router.Use(p.MattermostAuthorizationRequired)
-
+	// API routes with authentication middleware
 	apiRouter := router.PathPrefix("/api/v1").Subrouter()
-
+	apiRouter.Use(p.MattermostAuthorizationRequired)
 	apiRouter.HandleFunc("/hello", p.HelloWorld).Methods(http.MethodGet)
 
 	router.ServeHTTP(w, r)
@@ -77,8 +79,12 @@ func (p *Plugin) handleDialogSubmit(w http.ResponseWriter, r *http.Request) {
 
 	// Validate submission based on callback ID
 	var response *model.SubmitDialogResponse
-	switch payload.CallbackId {
-	case "approve_new":
+
+	// Route based on callback ID
+	switch {
+	case strings.HasPrefix(payload.CallbackId, "confirm_"):
+		response = p.handleConfirmDecision(payload)
+	case payload.CallbackId == "approve_new":
 		response = p.handleApproveNew(payload)
 	default:
 		p.API.LogWarn("Unknown dialog callback ID", "callback_id", payload.CallbackId)
@@ -187,7 +193,8 @@ func (p *Plugin) handleApproveNew(payload *model.SubmitDialogRequest) *model.Sub
 	}
 
 	// Task 4 (AC5): Handle KV Store Unavailability with proper error wrapping
-	if err := kvStore.SaveApproval(record); err != nil {
+	err = kvStore.SaveApproval(record)
+	if err != nil {
 		// Log with full context at highest layer (Mattermost convention)
 		p.API.LogError("Failed to save approval record to KV store",
 			"error", err.Error(),
@@ -203,7 +210,8 @@ func (p *Plugin) handleApproveNew(payload *model.SubmitDialogRequest) *model.Sub
 	}
 
 	// Story 2.1: Send DM notification to approver (best effort, graceful degradation)
-	if err := notifications.SendApprovalRequestDM(p.API, p.botUserID, record); err != nil {
+	postID, err := notifications.SendApprovalRequestDM(p.API, p.botUserID, record)
+	if err != nil {
 		// Log warning but continue - approval record already saved (data integrity priority)
 		p.API.LogWarn("DM notification failed but approval created",
 			"approval_id", record.ID,
@@ -214,11 +222,12 @@ func (p *Plugin) handleApproveNew(payload *model.SubmitDialogRequest) *model.Sub
 		)
 		// NotificationSent flag remains false (default value)
 	} else {
-		// Notification sent successfully - update flag (best effort)
+		// Notification sent successfully - update flags and post ID (best effort)
 		record.NotificationSent = true
+		record.NotificationPostID = postID
 		if err := kvStore.SaveApproval(record); err != nil {
 			// Log warning but don't fail - notification already sent
-			p.API.LogWarn("Failed to update NotificationSent flag",
+			p.API.LogWarn("Failed to update notification tracking fields",
 				"approval_id", record.ID,
 				"code", record.Code,
 				"error", err.Error(),
@@ -260,4 +269,324 @@ func (p *Plugin) handleApproveNew(payload *model.SubmitDialogRequest) *model.Sub
 		"approver", approver.Username)
 
 	return &model.SubmitDialogResponse{}
+}
+
+// handleAction processes button click actions from approval request notifications
+func (p *Plugin) handleAction(w http.ResponseWriter, r *http.Request) {
+	// Parse request body (Mattermost sends PostActionIntegrationRequest)
+	var request model.PostActionIntegrationRequest
+	if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
+		p.API.LogError("Failed to decode action request", "error", err.Error())
+		p.writeActionError(w, "Invalid request")
+		return
+	}
+
+	// Extract context data - Context is a map[string]any
+	contextData := request.Context
+
+	approvalID, ok := contextData["approval_id"].(string)
+	if !ok || approvalID == "" {
+		p.API.LogError("Missing or invalid approval_id in context")
+		p.writeActionError(w, "Invalid request")
+		return
+	}
+
+	action, ok := contextData["action"].(string)
+	if !ok || (action != "approve" && action != "deny") {
+		p.API.LogError("Missing or invalid action in context", "action", action)
+		p.writeActionError(w, "Invalid request")
+		return
+	}
+
+	// Get approval record from store
+	record, err := p.store.GetApproval(approvalID)
+	if err != nil {
+		p.API.LogError("Failed to get approval record",
+			"approval_id", approvalID,
+			"error", err.Error(),
+		)
+		p.writeActionError(w, "Approval not found")
+		return
+	}
+
+	// Verify authenticated user is the designated approver
+	approverID := request.UserId
+	if record.ApproverID != approverID {
+		p.API.LogError("Unauthorized approval attempt",
+			"approval_id", approvalID,
+			"authenticated_user", approverID,
+			"designated_approver", record.ApproverID,
+		)
+		p.writeActionError(w, "Permission denied")
+		return
+	}
+
+	// Check status (immutability guard)
+	if record.Status != approval.StatusPending {
+		p.writeActionError(w, fmt.Sprintf("Decision already recorded: %s", record.Status))
+		return
+	}
+
+	// Open confirmation modal
+	if err := p.openConfirmationModal(request.TriggerId, record, action); err != nil {
+		p.API.LogError("Failed to open confirmation modal",
+			"approval_id", approvalID,
+			"action", action,
+			"error", err.Error(),
+		)
+		p.writeActionError(w, "Failed to open confirmation modal")
+		return
+	}
+
+	// Return success response
+	p.writeActionSuccess(w)
+}
+
+// openConfirmationModal opens an interactive dialog for approval/denial confirmation
+func (p *Plugin) openConfirmationModal(triggerID string, record *approval.ApprovalRecord, action string) error {
+	// Determine modal title and confirmation text
+	title := "Confirm Approval"
+	confirmText := "Confirm you are approving:"
+	if action == "deny" {
+		title = "Confirm Denial"
+		confirmText = "Confirm you are denying:"
+	}
+
+	// Format description (quoted)
+	quotedDescription := fmt.Sprintf("> %s", record.Description)
+
+	// Construct modal introduction text
+	introText := fmt.Sprintf(
+		"%s\n\n%s\n\n**From:** @%s (%s)\n**Request ID:** `%s`\n\n**This decision will be recorded and cannot be edited.**",
+		confirmText,
+		quotedDescription,
+		record.RequesterUsername,
+		record.RequesterDisplayName,
+		record.Code,
+	)
+
+	// Create interactive dialog
+	dialog := model.OpenDialogRequest{
+		TriggerId: triggerID,
+		URL:       "/plugins/com.mattermost.plugin-approver2/dialog/submit",
+		Dialog: model.Dialog{
+			CallbackId:       fmt.Sprintf("confirm_%s_%s", action, record.ID),
+			Title:            title,
+			IntroductionText: introText,
+			Elements: []model.DialogElement{
+				{
+					DisplayName: "Add comment (optional)",
+					Name:        "comment",
+					Type:        "textarea",
+					Placeholder: "Optional: Provide context or reasoning for your decision",
+					MaxLength:   500,
+					Optional:    true,
+				},
+			},
+			SubmitLabel: "Confirm",
+		},
+	}
+
+	if appErr := p.API.OpenInteractiveDialog(dialog); appErr != nil {
+		return fmt.Errorf("failed to open dialog: %w", appErr)
+	}
+
+	return nil
+}
+
+// writeActionSuccess writes a successful PostActionIntegrationResponse
+func (p *Plugin) writeActionSuccess(w http.ResponseWriter) {
+	response := &model.PostActionIntegrationResponse{}
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(response)
+}
+
+// writeActionError writes an error PostActionIntegrationResponse
+func (p *Plugin) writeActionError(w http.ResponseWriter, message string) {
+	response := &model.PostActionIntegrationResponse{
+		EphemeralText: message,
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusBadRequest)
+	_ = json.NewEncoder(w).Encode(response)
+}
+
+// handleConfirmDecision processes confirmation modal submissions (approve/deny decisions)
+func (p *Plugin) handleConfirmDecision(payload *model.SubmitDialogRequest) *model.SubmitDialogResponse {
+	// Parse callback ID: "confirm_approve_recordID" or "confirm_deny_recordID"
+	parts := strings.Split(payload.CallbackId, "_")
+	if len(parts) != 3 {
+		p.API.LogError("Invalid callback ID format", "callback_id", payload.CallbackId)
+		return &model.SubmitDialogResponse{
+			Error: "Invalid request format",
+		}
+	}
+
+	action := parts[1]     // "approve" or "deny"
+	approvalID := parts[2] // record ID
+
+	// Validate action
+	if action != "approve" && action != "deny" {
+		p.API.LogError("Invalid action in callback ID", "action", action, "callback_id", payload.CallbackId)
+		return &model.SubmitDialogResponse{
+			Error: "Invalid action",
+		}
+	}
+
+	// Extract comment (optional)
+	comment := ""
+	if commentVal, ok := payload.Submission["comment"]; ok {
+		if commentStr, ok := commentVal.(string); ok {
+			comment = strings.TrimSpace(commentStr)
+		}
+	}
+
+	// Verify approver identity
+	approverID := payload.UserId
+	record, err := p.store.GetApproval(approvalID)
+	if err != nil {
+		p.API.LogError("Failed to get approval record in confirm dialog",
+			"approval_id", approvalID,
+			"error", err.Error(),
+		)
+		return &model.SubmitDialogResponse{
+			Error: "Approval not found",
+		}
+	}
+
+	if record.ApproverID != approverID {
+		p.API.LogError("Unauthorized decision attempt",
+			"approval_id", approvalID,
+			"authenticated_user", approverID,
+			"designated_approver", record.ApproverID,
+		)
+		return &model.SubmitDialogResponse{
+			Error: "Permission denied",
+		}
+	}
+
+	// Re-check status (race condition guard)
+	if record.Status != approval.StatusPending {
+		p.API.LogWarn("Cannot record decision for non-pending approval",
+			"approval_id", approvalID,
+			"current_status", record.Status,
+		)
+		return &model.SubmitDialogResponse{
+			Error: fmt.Sprintf("Decision already recorded: %s", record.Status),
+		}
+	}
+
+	// Record decision (Story 2.4 integration point - currently stubbed)
+	decision := "approved"
+	if action == "deny" {
+		decision = "denied"
+	}
+
+	if err := p.service.RecordDecision(approvalID, approverID, decision, comment); err != nil {
+		p.API.LogError("Failed to record decision",
+			"approval_id", approvalID,
+			"action", action,
+			"error", err.Error(),
+		)
+		return &model.SubmitDialogResponse{
+			Error: "Failed to record decision. Please try again.",
+		}
+	}
+
+	// Disable buttons in original DM notification (best effort)
+	if err := p.disableButtonsInDM(record, decision); err != nil {
+		// Log warning but continue - decision already recorded
+		p.API.LogWarn("Failed to disable buttons in DM notification",
+			"approval_id", approvalID,
+			"decision", decision,
+			"error", err.Error(),
+		)
+	}
+
+	p.API.LogInfo("Approval decision recorded",
+		"approval_id", approvalID,
+		"code", record.Code,
+		"decision", decision,
+		"approver_id", approverID,
+	)
+
+	// Return success - modal will close
+	return &model.SubmitDialogResponse{}
+}
+
+// disableButtonsInDM disables the action buttons in the original DM notification
+func (p *Plugin) disableButtonsInDM(record *approval.ApprovalRecord, decision string) error {
+	// Check if we have the notification post ID
+	if record.NotificationPostID == "" {
+		// Fallback: send new message if post ID not available
+		return p.sendDecisionConfirmationFallback(record, decision)
+	}
+
+	// Get the original post
+	post, appErr := p.API.GetPost(record.NotificationPostID)
+	if appErr != nil {
+		return fmt.Errorf("failed to get original post: %w", appErr)
+	}
+
+	// Create disabled buttons with updated message
+	statusEmoji := "✅"
+	statusText := "Approved"
+	if decision == "denied" {
+		statusEmoji = "❌"
+		statusText = "Denied"
+	}
+
+	// Update the message to show decision recorded
+	post.Message = fmt.Sprintf("%s **Decision Recorded: %s**\n\n%s", statusEmoji, statusText, post.Message)
+
+	// Disable the buttons by removing actions from attachments
+	if attachments, ok := post.Props["attachments"].([]any); ok && len(attachments) > 0 {
+		if attachment, ok := attachments[0].(map[string]any); ok {
+			// Remove actions to disable buttons
+			delete(attachment, "actions")
+		}
+	}
+
+	// Update the post
+	if _, appErr := p.API.UpdatePost(post); appErr != nil {
+		return fmt.Errorf("failed to update post: %w", appErr)
+	}
+
+	return nil
+}
+
+// sendDecisionConfirmationFallback sends a new DM when the original post cannot be updated
+func (p *Plugin) sendDecisionConfirmationFallback(record *approval.ApprovalRecord, decision string) error {
+	// Get DM channel
+	dmChannelID, err := notifications.GetDMChannelID(p.API, p.botUserID, record.ApproverID)
+	if err != nil {
+		return fmt.Errorf("failed to get DM channel: %w", err)
+	}
+
+	// Create informational message
+	statusEmoji := "✅"
+	statusText := "Approved"
+	if decision == "denied" {
+		statusEmoji = "❌"
+		statusText = "Denied"
+	}
+
+	message := fmt.Sprintf(
+		"%s **Decision Recorded: %s**\n\nApproval request `%s` has been decided.\n\nThe requester will be notified of your decision.",
+		statusEmoji,
+		statusText,
+		record.Code,
+	)
+
+	post := &model.Post{
+		UserId:    p.botUserID,
+		ChannelId: dmChannelID,
+		Message:   message,
+	}
+
+	if _, appErr := p.API.CreatePost(post); appErr != nil {
+		return fmt.Errorf("failed to create post: %w", appErr)
+	}
+
+	return nil
 }
