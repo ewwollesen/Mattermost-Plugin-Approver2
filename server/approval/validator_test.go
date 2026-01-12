@@ -3,6 +3,8 @@ package approval
 import (
 	"testing"
 
+	"github.com/mattermost/mattermost/server/public/model"
+	"github.com/mattermost/mattermost/server/public/plugin/plugintest"
 	"github.com/stretchr/testify/assert"
 )
 
@@ -184,4 +186,122 @@ func TestIsValidStatus(t *testing.T) {
 			assert.Equal(t, tt.valid, result)
 		})
 	}
+}
+
+func TestValidateDescription(t *testing.T) {
+	tests := []struct {
+		name        string
+		description string
+		expectError bool
+		errorMsg    string
+	}{
+		{
+			name:        "valid description",
+			description: "Please approve this deployment to production",
+			expectError: false,
+		},
+		{
+			name:        "exactly 1000 characters",
+			description: string(make([]byte, 1000)),
+			expectError: false,
+		},
+		{
+			name:        "1001 characters fails",
+			description: string(make([]byte, 1001)),
+			expectError: true,
+			errorMsg:    "max 1000",
+		},
+		{
+			name:        "empty description fails",
+			description: "",
+			expectError: true,
+			errorMsg:    "required",
+		},
+		{
+			name:        "whitespace only description fails",
+			description: "   \t\n   ",
+			expectError: true,
+			errorMsg:    "required",
+		},
+		{
+			name:        "Unicode characters within limit",
+			description: "请批准此部署 🚀",
+			expectError: false,
+		},
+		{
+			name:        "error includes character count",
+			description: string(make([]byte, 1500)),
+			expectError: true,
+			errorMsg:    "1500",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := ValidateDescription(tt.description)
+			if tt.expectError {
+				assert.Error(t, err)
+				assert.Contains(t, err.Error(), tt.errorMsg)
+			} else {
+				assert.NoError(t, err)
+			}
+		})
+	}
+}
+
+func TestValidateApprover(t *testing.T) {
+	t.Run("valid user passes validation", func(t *testing.T) {
+		api := &plugintest.API{}
+		expectedUser := &model.User{
+			Id:       "user123",
+			Username: "alice",
+			DeleteAt: 0, // Active user
+		}
+		api.On("GetUser", "user123").Return(expectedUser, nil)
+
+		user, err := ValidateApprover("user123", api)
+		assert.NoError(t, err)
+		assert.NotNil(t, user)
+		assert.Equal(t, expectedUser, user)
+		api.AssertExpectations(t)
+	})
+
+	t.Run("non-existent user returns error", func(t *testing.T) {
+		api := &plugintest.API{}
+		appErr := model.NewAppError("GetUser", "api.user.get.app_error", nil, "", 404)
+		api.On("GetUser", "invalid").Return(nil, appErr)
+
+		user, err := ValidateApprover("invalid", api)
+		assert.Error(t, err)
+		assert.Nil(t, user)
+		assert.Contains(t, err.Error(), "failed to validate approver")
+		assert.Contains(t, err.Error(), "invalid")
+	})
+
+	t.Run("deleted user returns error", func(t *testing.T) {
+		api := &plugintest.API{}
+		api.On("GetUser", "deleted").Return(&model.User{
+			Id:       "deleted",
+			Username: "deactivated",
+			DeleteAt: 1234567890000, // Deleted user (non-zero DeleteAt)
+		}, nil)
+
+		user, err := ValidateApprover("deleted", api)
+		assert.Error(t, err)
+		assert.Nil(t, user)
+		assert.Contains(t, err.Error(), "not a valid user")
+		assert.Contains(t, err.Error(), "active")
+	})
+
+	t.Run("API error is properly wrapped", func(t *testing.T) {
+		api := &plugintest.API{}
+		appErr := model.NewAppError("GetUser", "api.user.get.app_error", nil, "database connection failed", 500)
+		api.On("GetUser", "user456").Return(nil, appErr)
+
+		user, err := ValidateApprover("user456", api)
+		assert.Error(t, err)
+		assert.Nil(t, user)
+		assert.Contains(t, err.Error(), "failed to validate approver")
+		assert.Contains(t, err.Error(), "user456")
+	})
 }

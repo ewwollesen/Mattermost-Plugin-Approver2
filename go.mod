@@ -1,9 +1,12 @@
-module github.com/mattermost/mattermost-plugin-starter-template
+module github.com/mattermost/mattermost-plugin-approver2
 
-go 1.24.11
+go 1.24.6
+
+toolchain go1.24.11
 
 require (
 	github.com/gorilla/mux v1.8.1
+	github.com/mattermost/mattermost-plugin-starter-template v0.5.0
 	github.com/mattermost/mattermost/server/public v0.1.21
 	github.com/pkg/errors v0.9.1
 	github.com/stretchr/testify v1.11.1

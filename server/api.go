@@ -95,17 +95,61 @@ func (p *Plugin) handleDialogSubmit(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-// handleApproveNew creates and saves a new approval request
+// handleApproveNew creates and saves a new approval request.
+// Validation occurs in two layers:
+// 1. Field presence validation (HandleDialogSubmission) - keeps modal open
+// 2. Business logic validation (ValidateApprover, ValidateDescription) - keeps modal open
+//
+// All errors are logged at this highest layer per Mattermost conventions.
+// Field-specific errors return to modal; general errors close modal.
 func (p *Plugin) handleApproveNew(payload *model.SubmitDialogRequest) *model.SubmitDialogResponse {
-	// First validate the submission
+	// Layer 1: Basic field presence validation
 	response := command.HandleDialogSubmission(payload.Submission)
 	if len(response.Errors) > 0 {
 		return response
 	}
 
-	// Extract validated data
-	approverID := payload.Submission["approver"].(string)
-	description := payload.Submission["description"].(string)
+	// Extract validated data with safe type assertions
+	approverID, ok := payload.Submission["approver"].(string)
+	if !ok {
+		p.API.LogError("Invalid approver type in submission", "type", fmt.Sprintf("%T", payload.Submission["approver"]))
+		return &model.SubmitDialogResponse{
+			Error: "Invalid submission format. Please try again.",
+		}
+	}
+
+	description, ok := payload.Submission["description"].(string)
+	if !ok {
+		p.API.LogError("Invalid description type in submission", "type", fmt.Sprintf("%T", payload.Submission["description"]))
+		return &model.SubmitDialogResponse{
+			Error: "Invalid submission format. Please try again.",
+		}
+	}
+
+	// Layer 2: Business logic validation
+
+	// Validate description length (AC4: Validate Description Length)
+	if err := approval.ValidateDescription(description); err != nil {
+		p.API.LogError("Description validation failed", "error", err.Error(), "description_length", len(description))
+		return &model.SubmitDialogResponse{
+			Errors: map[string]string{
+				"description": err.Error(),
+			},
+		}
+	}
+
+	// Validate approver exists and is active (AC3: Validate Invalid Approver)
+	// AC6: Handle Mattermost API Errors - error wrapping is done in ValidateApprover
+	// Returns validated user object to avoid redundant API call
+	approver, err := approval.ValidateApprover(approverID, p.API)
+	if err != nil {
+		p.API.LogError("Approver validation failed", "error", err.Error(), "approver_id", approverID)
+		return &model.SubmitDialogResponse{
+			Errors: map[string]string{
+				"approver": err.Error(),
+			},
+		}
+	}
 
 	// Get requester info
 	requester, appErr := p.API.GetUser(payload.UserId)
@@ -116,59 +160,72 @@ func (p *Plugin) handleApproveNew(payload *model.SubmitDialogRequest) *model.Sub
 		}
 	}
 
-	// Get approver info
-	approver, appErr := p.API.GetUser(approverID)
-	if appErr != nil {
-		p.API.LogError("Failed to get approver user", "user_id", approverID, "error", appErr.Error())
-		return &model.SubmitDialogResponse{
-			Errors: map[string]string{
-				"approver": "Failed to retrieve approver information",
-			},
-		}
-	}
-
 	// Create KV store for code uniqueness checking
 	kvStore := store.NewKVStore(p.API)
 
 	// Create approval record with unique code
 	record, err := approval.NewApprovalRecord(
 		kvStore,
-		requester.Id, requester.Username, requester.GetDisplayName(model.ShowUsername),
-		approver.Id, approver.Username, approver.GetDisplayName(model.ShowUsername),
+		requester.Id, requester.Username, requester.GetDisplayName(model.ShowFullName),
+		approver.Id, approver.Username, approver.GetDisplayName(model.ShowFullName),
 		description,
 		payload.ChannelId,
 		payload.TeamId,
 	)
 	if err != nil {
-		p.API.LogError("Failed to create approval record", "error", err.Error())
+		// Log with full context (Task 4: AC6)
+		p.API.LogError("Failed to create approval record",
+			"error", err.Error(),
+			"requester_id", requester.Id,
+			"approver_id", approver.Id,
+		)
+		// General error closes modal (system failure, not validation failure)
 		return &model.SubmitDialogResponse{
-			Error: "Failed to generate unique approval code",
-		}
-	}
-	if err := kvStore.SaveApproval(record); err != nil {
-		p.API.LogError("Failed to save approval record", "record_id", record.ID, "error", err.Error())
-		return &model.SubmitDialogResponse{
-			Error: "Failed to save approval request",
+			Error: "Failed to generate unique approval code. Please try again.",
 		}
 	}
 
-	// Send confirmation message to requester
-	confirmMsg := fmt.Sprintf("✅ **Approval request created!**\n\n"+
-		"**Reference Code:** `%s`\n"+
-		"**Approver:** @%s\n"+
-		"**Description:** %s\n\n"+
-		"_Your approver will be notified shortly._",
-		record.Code, approver.Username, description)
+	// Task 4 (AC5): Handle KV Store Unavailability with proper error wrapping
+	if err := kvStore.SaveApproval(record); err != nil {
+		// Log with full context at highest layer (Mattermost convention)
+		p.API.LogError("Failed to save approval record to KV store",
+			"error", err.Error(),
+			"record_id", record.ID,
+			"code", record.Code,
+			"requester_id", requester.Id,
+			"approver_id", approver.Id,
+		)
+		// AC5: User-friendly message for KV store failures
+		return &model.SubmitDialogResponse{
+			Error: "Failed to create approval request. The system is temporarily unavailable. Please try again.",
+		}
+	}
+
+	// Send ephemeral confirmation message to requester (visible only to them)
+	confirmMsg := fmt.Sprintf("✅ **Approval Request Submitted**\n\n"+
+		"**Approver:** @%s (%s)\n"+
+		"**Request ID:** `%s`\n\n"+
+		"You will be notified when a decision is made.",
+		approver.Username, approver.GetDisplayName(model.ShowFullName),
+		record.Code)
 
 	post := &model.Post{
-		UserId:    payload.UserId,
+		UserId:    "", // Empty for system/bot message
 		ChannelId: payload.ChannelId,
 		Message:   confirmMsg,
 	}
 
-	if _, appErr := p.API.CreatePost(post); appErr != nil {
-		p.API.LogError("Failed to send confirmation post", "error", appErr.Error())
-		// Don't fail the whole operation if we can't send the confirmation
+	// Send ephemeral post (only requester sees it)
+	ephemeralPost := p.API.SendEphemeralPost(payload.UserId, post)
+	if ephemeralPost == nil {
+		p.API.LogError("Failed to send ephemeral confirmation post", "user_id", payload.UserId, "record_id", record.ID, "code", record.Code)
+		// AC3: Fallback to regular post as generic success indicator if ephemeral fails
+		// This ensures user sees confirmation even if ephemeral delivery fails
+		post.UserId = payload.UserId
+		if _, appErr := p.API.CreatePost(post); appErr != nil {
+			p.API.LogError("Failed to send fallback confirmation post", "user_id", payload.UserId, "record_id", record.ID, "code", record.Code, "error", appErr.Error())
+			// Don't fail the whole operation - record is already saved
+		}
 	}
 
 	p.API.LogInfo("Approval request created successfully",
