@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"slices"
+	"sort"
 	"strings"
 	"time"
 
@@ -418,33 +419,128 @@ func (r *Router) executeList(args *model.CommandArgs) (*model.CommandResponse, e
 	}, nil
 }
 
-// formatListResponse formats approval records into a readable list
+// groupAndSortRecords separates records into three groups (pending, decided, canceled)
+// and sorts each group by appropriate timestamp descending (newest first)
+func groupAndSortRecords(records []*approval.ApprovalRecord) (pending, decided, canceled []*approval.ApprovalRecord) {
+	// Separate into groups
+	for _, record := range records {
+		switch record.Status {
+		case approval.StatusPending:
+			pending = append(pending, record)
+		case approval.StatusApproved, approval.StatusDenied:
+			decided = append(decided, record)
+		case approval.StatusCanceled:
+			canceled = append(canceled, record)
+		}
+	}
+
+	// Sort pending by CreatedAt descending
+	sort.Slice(pending, func(i, j int) bool {
+		return pending[i].CreatedAt > pending[j].CreatedAt
+	})
+
+	// Sort decided by DecidedAt descending
+	sort.Slice(decided, func(i, j int) bool {
+		return decided[i].DecidedAt > decided[j].DecidedAt
+	})
+
+	// Sort canceled by CanceledAt descending (fallback to CreatedAt if CanceledAt == 0)
+	sort.Slice(canceled, func(i, j int) bool {
+		iTime := canceled[i].CanceledAt
+		if iTime == 0 {
+			iTime = canceled[i].CreatedAt
+		}
+		jTime := canceled[j].CanceledAt
+		if jTime == 0 {
+			jTime = canceled[j].CreatedAt
+		}
+		return iTime > jTime
+	})
+
+	return pending, decided, canceled
+}
+
+// formatListResponse formats approval records into a readable list with grouped sections
 func formatListResponse(records []*approval.ApprovalRecord, total int) string {
 	var output strings.Builder
 
 	output.WriteString("**Your Approval Records:**\n\n")
 
-	for _, record := range records {
-		// Get status icon
-		statusIcon := getStatusIcon(record.Status)
+	// Group and sort records
+	pending, decided, canceled := groupAndSortRecords(records)
 
-		// Format timestamp
-		createdTime := time.Unix(0, record.CreatedAt*int64(time.Millisecond))
-		formattedDate := createdTime.UTC().Format("2006-01-02 15:04")
+	// Limit to 20 total records across all groups
+	displayed := 0
+	limit := 20
 
-		// Format record line
-		output.WriteString(fmt.Sprintf("**%s** | %s | Requested by: @%s | Approver: @%s | %s\n",
-			record.Code,
-			statusIcon,
-			record.RequesterUsername,
-			record.ApproverUsername,
-			formattedDate,
-		))
+	// Render Pending section
+	if len(pending) > 0 {
+		output.WriteString("**Pending Approvals:**\n")
+		for _, record := range pending {
+			if displayed >= limit {
+				break
+			}
+			statusIcon := getStatusIcon(record.Status)
+			createdTime := time.Unix(0, record.CreatedAt*int64(time.Millisecond))
+			formattedDate := createdTime.UTC().Format("2006-01-02 15:04")
+			output.WriteString(fmt.Sprintf("**%s** | %s | Requested by: @%s | Approver: @%s | %s\n",
+				record.Code, statusIcon, record.RequesterUsername, record.ApproverUsername, formattedDate))
+			displayed++
+		}
+		output.WriteString("\n")
 	}
 
-	// Add pagination footer if needed
-	if total > 20 {
-		output.WriteString(fmt.Sprintf("\n\n*Showing 20 of %d total records (most recent first).* Use `/approve get <ID>` to view specific requests.", total))
+	// Render Decided section
+	if len(decided) > 0 && displayed < limit {
+		output.WriteString("**Decided Approvals:**\n")
+		for _, record := range decided {
+			if displayed >= limit {
+				break
+			}
+			statusIcon := getStatusIcon(record.Status)
+			createdTime := time.Unix(0, record.CreatedAt*int64(time.Millisecond))
+			formattedDate := createdTime.UTC().Format("2006-01-02 15:04")
+			output.WriteString(fmt.Sprintf("**%s** | %s | Requested by: @%s | Approver: @%s | %s\n",
+				record.Code, statusIcon, record.RequesterUsername, record.ApproverUsername, formattedDate))
+			displayed++
+		}
+		output.WriteString("\n")
+	}
+
+	// Render Canceled section (with reason)
+	if len(canceled) > 0 && displayed < limit {
+		output.WriteString("**Canceled Requests:**\n")
+		for _, record := range canceled {
+			if displayed >= limit {
+				break
+			}
+
+			// Format canceled status with reason
+			var statusText string
+			if record.CanceledReason != "" {
+				reason := record.CanceledReason
+				// Truncate if longer than 40 characters (use rune count for proper UTF-8 handling)
+				runes := []rune(reason)
+				if len(runes) > 40 {
+					reason = string(runes[:37]) + "..."
+				}
+				statusText = fmt.Sprintf("🚫 Canceled (%s)", reason)
+			} else {
+				statusText = "🚫 Canceled"
+			}
+
+			createdTime := time.Unix(0, record.CreatedAt*int64(time.Millisecond))
+			formattedDate := createdTime.UTC().Format("2006-01-02 15:04")
+			output.WriteString(fmt.Sprintf("**%s** | %s | Requested by: @%s | Approver: @%s | %s\n",
+				record.Code, statusText, record.RequesterUsername, record.ApproverUsername, formattedDate))
+			displayed++
+		}
+		output.WriteString("\n")
+	}
+
+	// Pagination footer (if total > displayed)
+	if total > displayed {
+		output.WriteString(fmt.Sprintf("*Showing %d of %d total records.* Use `/approve get <ID>` to view specific requests.", displayed, total))
 	}
 
 	return output.String()
@@ -544,19 +640,48 @@ func formatRecordDetail(record *approval.ApprovalRecord) string {
 	// Description (AC3)
 	output.WriteString(fmt.Sprintf("**Description:**\n%s\n\n", record.Description))
 
+	// Cancellation details (Story 4.5: display reason/timestamp for canceled requests)
+	if record.Status == approval.StatusCanceled {
+		output.WriteString("---\n\n")
+		output.WriteString("**Cancellation:**\n")
+
+		// Cancellation reason (handle empty for old records)
+		reason := record.CanceledReason
+		if reason == "" {
+			reason = "No reason recorded (cancelled before v0.2.0)"
+		}
+		output.WriteString(fmt.Sprintf("**Reason:** %s\n", reason))
+
+		// Who cancelled (only requester can cancel in v0.2.0)
+		output.WriteString(fmt.Sprintf("**Canceled by:** @%s\n", record.RequesterUsername))
+
+		// Cancellation timestamp (handle zero value for old records)
+		if record.CanceledAt > 0 {
+			canceledTime := time.Unix(0, record.CanceledAt*int64(time.Millisecond))
+			formattedCanceled := canceledTime.UTC().Format("2006-01-02 15:04:05 MST")
+			output.WriteString(fmt.Sprintf("**Canceled:** %s\n", formattedCanceled))
+		} else {
+			output.WriteString("**Canceled:** Unknown\n")
+		}
+
+		output.WriteString("\n") // Spacing before next section
+	}
+
 	// Timestamps (AC3)
 	// Format: YYYY-MM-DD HH:MM:SS UTC
 	createdTime := time.Unix(0, record.CreatedAt*int64(time.Millisecond))
 	formattedCreated := createdTime.UTC().Format("2006-01-02 15:04:05 MST")
 	output.WriteString(fmt.Sprintf("**Requested:** %s\n", formattedCreated))
 
-	// Decided timestamp (only if decided)
-	if record.DecidedAt > 0 {
-		decidedTime := time.Unix(0, record.DecidedAt*int64(time.Millisecond))
-		formattedDecided := decidedTime.UTC().Format("2006-01-02 15:04:05 MST")
-		output.WriteString(fmt.Sprintf("**Decided:** %s\n", formattedDecided))
-	} else {
-		output.WriteString("**Decided:** Not yet decided\n")
+	// Decided timestamp (only if decided and not canceled)
+	if record.Status != approval.StatusCanceled {
+		if record.DecidedAt > 0 {
+			decidedTime := time.Unix(0, record.DecidedAt*int64(time.Millisecond))
+			formattedDecided := decidedTime.UTC().Format("2006-01-02 15:04:05 MST")
+			output.WriteString(fmt.Sprintf("**Decided:** %s\n", formattedDecided))
+		} else {
+			output.WriteString("**Decided:** Not yet decided\n")
+		}
 	}
 
 	// Decision comment (only if present) (AC3)

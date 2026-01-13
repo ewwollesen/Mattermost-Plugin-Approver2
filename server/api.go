@@ -86,6 +86,8 @@ func (p *Plugin) handleDialogSubmit(w http.ResponseWriter, r *http.Request) {
 		response = p.handleConfirmDecision(payload)
 	case payload.CallbackId == "approve_new":
 		response = p.handleApproveNew(payload)
+	case strings.HasPrefix(payload.CallbackId, "cancel_approval_"):
+		response = p.handleCancelModalSubmission(payload)
 	default:
 		p.API.LogWarn("Unknown dialog callback ID", "callback_id", payload.CallbackId)
 		response = &model.SubmitDialogResponse{
@@ -578,13 +580,13 @@ func (p *Plugin) disableButtonsInDM(record *approval.ApprovalRecord, decision st
 	// Update the message to show decision recorded
 	post.Message = fmt.Sprintf("%s **Decision Recorded: %s**\n\n%s", statusEmoji, statusText, post.Message)
 
-	// Disable the buttons by removing actions from attachments
-	if attachments, ok := post.Props["attachments"].([]any); ok && len(attachments) > 0 {
-		if attachment, ok := attachments[0].(map[string]any); ok {
-			// Remove actions to disable buttons
-			delete(attachment, "actions")
-		}
-	}
+	// Remove action buttons by clearing all Props (Story 4.7: same approach as cancellation)
+	// WHY clear all Props instead of selective removal:
+	// - Avoids complex nested map manipulation (reduced from 9 lines to 3)
+	// - More maintainable and less error-prone than traversing attachments[0].actions
+	// - Consistent with cancellation workflow (server/notifications/dm.go:220)
+	// - No side effects: we only put action buttons in Props, so clearing all is safe
+	post.Props = model.StringInterface{}
 
 	// Update the post
 	if _, appErr := p.API.UpdatePost(post); appErr != nil {
@@ -628,4 +630,152 @@ func (p *Plugin) sendDecisionConfirmationFallback(record *approval.ApprovalRecor
 	}
 
 	return nil
+}
+
+// handleCancelModalSubmission processes cancellation modal submissions
+// Story 4.3: Handles user-selected cancellation reason and performs cancellation
+func (p *Plugin) handleCancelModalSubmission(payload *model.SubmitDialogRequest) *model.SubmitDialogResponse {
+	// Parse callback ID: "cancel_approval_{approvalID}"
+	parts := strings.Split(payload.CallbackId, "_")
+	if len(parts) != 3 {
+		p.API.LogError("Invalid callback ID format", "callback_id", payload.CallbackId)
+		return &model.SubmitDialogResponse{
+			Error: "Invalid request format",
+		}
+	}
+
+	approvalID := parts[2]
+
+	// Extract form data
+	reasonCode, ok := payload.Submission["reason_code"].(string)
+	if !ok || reasonCode == "" {
+		return &model.SubmitDialogResponse{
+			Errors: map[string]string{
+				"reason_code": "Reason is required",
+			},
+		}
+	}
+
+	otherText := ""
+	if otherVal, ok := payload.Submission["other_reason_text"]; ok {
+		if otherStr, ok := otherVal.(string); ok {
+			otherText = strings.TrimSpace(otherStr)
+		}
+	}
+
+	// Validate "Other" reason requires text (AC8)
+	if reasonCode == "other" && otherText == "" {
+		return &model.SubmitDialogResponse{
+			Errors: map[string]string{
+				"other_reason_text": "Please provide details when selecting 'Other reason'",
+			},
+		}
+	}
+
+	// Map reason code to human-readable text
+	reasonText := p.mapCancellationReason(reasonCode, otherText)
+
+	// Get approval record
+	record, err := p.store.GetApproval(approvalID)
+	if err != nil {
+		p.API.LogError("Failed to get approval record in cancel modal",
+			"approval_id", approvalID,
+			"error", err.Error(),
+		)
+		return &model.SubmitDialogResponse{
+			Error: "Approval request not found",
+		}
+	}
+
+	// Verify user is the requester (permission check - AC5)
+	if record.RequesterID != payload.UserId {
+		p.API.LogError("Unauthorized cancellation attempt",
+			"approval_id", approvalID,
+			"authenticated_user", payload.UserId,
+			"requester_id", record.RequesterID,
+		)
+		return &model.SubmitDialogResponse{
+			Error: "Only the requester can cancel this approval",
+		}
+	}
+
+	// Get requester user for post update
+	requester, appErr := p.API.GetUser(payload.UserId)
+	if appErr != nil {
+		p.API.LogError("Failed to get requester user",
+			"error", appErr.Error(),
+			"user_id", payload.UserId,
+		)
+		return &model.SubmitDialogResponse{
+			Error: "Failed to retrieve user information. Please try again.",
+		}
+	}
+
+	// Call service to cancel approval (Story 4.4 already implemented)
+	err = p.service.CancelApproval(record.Code, payload.UserId, reasonText)
+	if err != nil {
+		p.API.LogError("Failed to cancel approval",
+			"error", err.Error(),
+			"approval_code", record.Code,
+			"user_id", payload.UserId,
+		)
+		return &model.SubmitDialogResponse{
+			Error: p.formatCancelError(err, record.Code),
+		}
+	}
+
+	// Post-cancellation actions (Stories 4.1, 4.2) - best effort
+	updatedRecord, err := p.store.GetByCode(record.Code)
+	if err != nil {
+		p.API.LogWarn("Failed to retrieve updated record for post update",
+			"error", err.Error(),
+			"approval_code", record.Code,
+		)
+	} else {
+		// Update the original post (Story 4.1)
+		err = notifications.UpdateApprovalPostForCancellation(p.API, updatedRecord, requester.Username)
+		if err != nil {
+			p.API.LogWarn("Failed to update approver post",
+				"error", err.Error(),
+				"approval_code", record.Code,
+				"approver_post_id", updatedRecord.NotificationPostID,
+			)
+		}
+
+		// Send cancellation notification DM (Story 4.2)
+		_, err = notifications.SendCancellationNotificationDM(p.API, p.botUserID, updatedRecord, requester.Username)
+		if err != nil {
+			p.API.LogWarn("Failed to send cancellation notification",
+				"error", err.Error(),
+				"approval_id", updatedRecord.ID,
+				"approver_id", updatedRecord.ApproverID,
+			)
+		}
+	}
+
+	p.API.LogInfo("Approval canceled successfully via modal",
+		"approval_code", record.Code,
+		"user_id", payload.UserId,
+		"reason", reasonText,
+	)
+
+	// Success - return empty response (modal will close)
+	return &model.SubmitDialogResponse{}
+}
+
+// mapCancellationReason maps reason codes to human-readable text
+// Story 4.3: Convert form values to display strings for data instrumentation
+func (p *Plugin) mapCancellationReason(code, otherText string) string {
+	switch code {
+	case "no_longer_needed":
+		return "No longer needed"
+	case "wrong_approver":
+		return "Wrong approver"
+	case "sensitive_info":
+		return "Sensitive information"
+	case "other":
+		return fmt.Sprintf("Other: %s", otherText)
+	default:
+		return "Unknown reason"
+	}
 }

@@ -697,8 +697,8 @@ func TestExecuteList(t *testing.T) {
 		assert.NotContains(t, resp.Text, "A-REC20")
 		assert.NotContains(t, resp.Text, "A-REC24")
 
-		// Should show pagination footer with new format
-		assert.Contains(t, resp.Text, "Showing 20 of 25 total records (most recent first)")
+		// Should show pagination footer with new format (Story 4.6: updated message)
+		assert.Contains(t, resp.Text, "Showing 20 of 25 total records")
 		assert.Contains(t, resp.Text, "/approve get")
 
 		store.AssertExpectations(t)
@@ -1335,4 +1335,691 @@ func TestExecuteGet(t *testing.T) {
 		api.AssertExpectations(t)
 		store.AssertExpectations(t)
 	})
+
+	// Story 4.5: Display cancellation reason in approval details
+	t.Run("displays cancellation details for cancelled request with reason", func(t *testing.T) {
+		api := &plugintest.API{}
+		store := &mockStore{}
+		router := NewRouter(api, store)
+
+		record := &approval.ApprovalRecord{
+			ID:                   "record1",
+			Code:                 "A-CANC1",
+			RequesterID:          "user1",
+			RequesterUsername:    "alice",
+			RequesterDisplayName: "Alice Carter",
+			ApproverID:           "user2",
+			ApproverUsername:     "bob",
+			ApproverDisplayName:  "Bob Smith",
+			Description:          "Deploy to production",
+			Status:               approval.StatusCanceled,
+			CanceledReason:       "No longer needed",
+			CanceledAt:           1704897300000, // 2024-01-10 14:35:00 UTC
+			CreatedAt:            1704897000000, // 2024-01-10 14:30:00 UTC
+			DecidedAt:            1704897300000, // 2024-01-10 14:35:00 UTC
+		}
+
+		store.On("GetApprovalByCode", "A-CANC1").Return(record, nil)
+
+		args := &model.CommandArgs{
+			Command: "/approve get A-CANC1",
+			UserId:  "user1",
+		}
+
+		resp, err := router.Route(args)
+		assert.NoError(t, err)
+		assert.NotNil(t, resp)
+
+		// Verify cancellation section is present (AC1, AC2)
+		assert.Contains(t, resp.Text, "Cancellation:")
+		assert.Contains(t, resp.Text, "**Reason:** No longer needed")
+		assert.Contains(t, resp.Text, "**Canceled by:** @alice")
+		assert.Contains(t, resp.Text, "**Canceled:** 2024-01-10 14:35:00 UTC")
+
+		// Verify visual separator is present (AC3)
+		assert.Contains(t, resp.Text, "---")
+
+		// Verify cancellation section appears after description (AC3, Subtask 3.4)
+		descPos := strings.Index(resp.Text, "**Description:**")
+		cancelPos := strings.Index(resp.Text, "**Cancellation:**")
+		assert.Greater(t, cancelPos, descPos, "Cancellation section should appear after Description")
+
+		// Verify cancellation section appears before Context
+		contextPos := strings.Index(resp.Text, "**Context:**")
+		assert.Less(t, cancelPos, contextPos, "Cancellation section should appear before Context")
+
+		// Code Review Fix: Verify "Decided:" is NOT shown for cancelled requests (Issue #3)
+		assert.NotContains(t, resp.Text, "**Decided:**", "Cancelled requests should not show Decided timestamp")
+
+		store.AssertExpectations(t)
+	})
+
+	t.Run("displays fallback text for cancelled request without reason (old record)", func(t *testing.T) {
+		api := &plugintest.API{}
+		store := &mockStore{}
+		router := NewRouter(api, store)
+
+		record := &approval.ApprovalRecord{
+			ID:                   "record1",
+			Code:                 "A-OLD1",
+			RequesterID:          "user1",
+			RequesterUsername:    "alice",
+			RequesterDisplayName: "Alice Carter",
+			ApproverID:           "user2",
+			ApproverUsername:     "bob",
+			ApproverDisplayName:  "Bob Smith",
+			Description:          "Old cancelled request",
+			Status:               approval.StatusCanceled,
+			CanceledReason:       "", // Empty - old record
+			CanceledAt:           0,  // Zero value - old record
+			CreatedAt:            1704897000000,
+			DecidedAt:            1704897300000,
+		}
+
+		store.On("GetApprovalByCode", "A-OLD1").Return(record, nil)
+
+		args := &model.CommandArgs{
+			Command: "/approve get A-OLD1",
+			UserId:  "user1",
+		}
+
+		resp, err := router.Route(args)
+		assert.NoError(t, err)
+		assert.NotNil(t, resp)
+
+		// Verify fallback text for empty reason (AC5, Subtask 3.2)
+		assert.Contains(t, resp.Text, "**Reason:** No reason recorded (cancelled before v0.2.0)")
+
+		// Verify fallback text for zero timestamp (AC6, Subtask 3.3)
+		assert.Contains(t, resp.Text, "**Canceled:** Unknown")
+
+		// Should still show who cancelled
+		assert.Contains(t, resp.Text, "**Canceled by:** @alice")
+
+		// Code Review Fix: Verify "Decided:" is NOT shown for cancelled requests (Issue #3)
+		assert.NotContains(t, resp.Text, "**Decided:**", "Cancelled requests should not show Decided timestamp")
+
+		store.AssertExpectations(t)
+	})
+
+	t.Run("displays cancellation with Other reason and custom text", func(t *testing.T) {
+		api := &plugintest.API{}
+		store := &mockStore{}
+		router := NewRouter(api, store)
+
+		record := &approval.ApprovalRecord{
+			ID:                   "record1",
+			Code:                 "A-OTHER1",
+			RequesterID:          "user1",
+			RequesterUsername:    "alice",
+			RequesterDisplayName: "Alice Carter",
+			ApproverID:           "user2",
+			ApproverUsername:     "bob",
+			ApproverDisplayName:  "Bob Smith",
+			Description:          "Complex deployment",
+			Status:               approval.StatusCanceled,
+			CanceledReason:       "Other: The deployment window was moved to next week due to unexpected infrastructure changes",
+			CanceledAt:           1704897300000,
+			CreatedAt:            1704897000000,
+			DecidedAt:            1704897300000,
+		}
+
+		store.On("GetApprovalByCode", "A-OTHER1").Return(record, nil)
+
+		args := &model.CommandArgs{
+			Command: "/approve get A-OTHER1",
+			UserId:  "user1",
+		}
+
+		resp, err := router.Route(args)
+		assert.NoError(t, err)
+		assert.NotNil(t, resp)
+
+		// Verify full "Other" reason text is displayed (Subtask 3.6)
+		assert.Contains(t, resp.Text, "**Reason:** Other: The deployment window was moved to next week due to unexpected infrastructure changes")
+
+		store.AssertExpectations(t)
+	})
+
+	// Code Review Fix: Add tests for all cancellation reasons (Issue #4)
+	t.Run("displays cancellation with 'Changed requirements' reason", func(t *testing.T) {
+		api := &plugintest.API{}
+		store := &mockStore{}
+		router := NewRouter(api, store)
+
+		record := &approval.ApprovalRecord{
+			ID:                   "record1",
+			Code:                 "A-CHG1",
+			RequesterID:          "user1",
+			RequesterUsername:    "alice",
+			RequesterDisplayName: "Alice Carter",
+			ApproverID:           "user2",
+			ApproverUsername:     "bob",
+			ApproverDisplayName:  "Bob Smith",
+			Description:          "Deploy feature X",
+			Status:               approval.StatusCanceled,
+			CanceledReason:       "Changed requirements",
+			CanceledAt:           1704897300000,
+			CreatedAt:            1704897000000,
+		}
+
+		store.On("GetApprovalByCode", "A-CHG1").Return(record, nil)
+
+		args := &model.CommandArgs{
+			Command: "/approve get A-CHG1",
+			UserId:  "user1",
+		}
+
+		resp, err := router.Route(args)
+		assert.NoError(t, err)
+		assert.NotNil(t, resp)
+
+		// Verify "Changed requirements" reason displays correctly
+		assert.Contains(t, resp.Text, "**Reason:** Changed requirements")
+		assert.NotContains(t, resp.Text, "**Decided:**", "Cancelled requests should not show Decided timestamp")
+
+		store.AssertExpectations(t)
+	})
+
+	t.Run("displays cancellation with 'Created by mistake' reason", func(t *testing.T) {
+		api := &plugintest.API{}
+		store := &mockStore{}
+		router := NewRouter(api, store)
+
+		record := &approval.ApprovalRecord{
+			ID:                   "record1",
+			Code:                 "A-MIST1",
+			RequesterID:          "user1",
+			RequesterUsername:    "alice",
+			RequesterDisplayName: "Alice Carter",
+			ApproverID:           "user2",
+			ApproverUsername:     "bob",
+			ApproverDisplayName:  "Bob Smith",
+			Description:          "Wrong approval",
+			Status:               approval.StatusCanceled,
+			CanceledReason:       "Created by mistake",
+			CanceledAt:           1704897300000,
+			CreatedAt:            1704897000000,
+		}
+
+		store.On("GetApprovalByCode", "A-MIST1").Return(record, nil)
+
+		args := &model.CommandArgs{
+			Command: "/approve get A-MIST1",
+			UserId:  "user1",
+		}
+
+		resp, err := router.Route(args)
+		assert.NoError(t, err)
+		assert.NotNil(t, resp)
+
+		// Verify "Created by mistake" reason displays correctly
+		assert.Contains(t, resp.Text, "**Reason:** Created by mistake")
+		assert.NotContains(t, resp.Text, "**Decided:**", "Cancelled requests should not show Decided timestamp")
+
+		store.AssertExpectations(t)
+	})
+
+	t.Run("does not display cancellation section for non-cancelled statuses", func(t *testing.T) {
+		testCases := []struct {
+			name   string
+			status string
+		}{
+			{"pending", approval.StatusPending},
+			{"approved", approval.StatusApproved},
+			{"denied", approval.StatusDenied},
+		}
+
+		for _, tc := range testCases {
+			t.Run(tc.name, func(t *testing.T) {
+				api := &plugintest.API{}
+				store := &mockStore{}
+				router := NewRouter(api, store)
+
+				record := &approval.ApprovalRecord{
+					ID:                   "record1",
+					Code:                 "A-TEST1",
+					RequesterID:          "user1",
+					RequesterUsername:    "alice",
+					RequesterDisplayName: "Alice Carter",
+					ApproverID:           "user2",
+					ApproverUsername:     "bob",
+					ApproverDisplayName:  "Bob Smith",
+					Description:          "Test request",
+					Status:               tc.status,
+					CreatedAt:            1704897000000,
+				}
+
+				store.On("GetApprovalByCode", "A-TEST1").Return(record, nil)
+
+				args := &model.CommandArgs{
+					Command: "/approve get A-TEST1",
+					UserId:  "user1",
+				}
+
+				resp, err := router.Route(args)
+				assert.NoError(t, err)
+				assert.NotNil(t, resp)
+
+				// Should NOT contain cancellation section
+				assert.NotContains(t, resp.Text, "**Cancellation:**")
+				assert.NotContains(t, resp.Text, "**Canceled by:**")
+
+				store.AssertExpectations(t)
+			})
+		}
+	})
+}
+
+// Story 4.6: Tests for groupAndSortRecords and grouped list display
+
+func TestGroupAndSortRecords(t *testing.T) {
+	t.Run("separates records into three groups", func(t *testing.T) {
+		records := []*approval.ApprovalRecord{
+			{ID: "1", Status: approval.StatusPending, CreatedAt: 1000},
+			{ID: "2", Status: approval.StatusApproved, DecidedAt: 2000},
+			{ID: "3", Status: approval.StatusCanceled, CanceledAt: 3000},
+			{ID: "4", Status: approval.StatusDenied, DecidedAt: 4000},
+			{ID: "5", Status: approval.StatusPending, CreatedAt: 5000},
+		}
+
+		pending, decided, canceled := groupAndSortRecords(records)
+
+		// Verify group sizes
+		assert.Equal(t, 2, len(pending), "Should have 2 pending records")
+		assert.Equal(t, 2, len(decided), "Should have 2 decided records")
+		assert.Equal(t, 1, len(canceled), "Should have 1 canceled record")
+
+		// Verify pending group contains correct records
+		assert.Contains(t, []string{"1", "5"}, pending[0].ID)
+		assert.Contains(t, []string{"1", "5"}, pending[1].ID)
+
+		// Verify decided group contains correct records
+		assert.Contains(t, []string{"2", "4"}, decided[0].ID)
+		assert.Contains(t, []string{"2", "4"}, decided[1].ID)
+
+		// Verify canceled group
+		assert.Equal(t, "3", canceled[0].ID)
+	})
+
+	t.Run("sorts pending by CreatedAt descending", func(t *testing.T) {
+		records := []*approval.ApprovalRecord{
+			{ID: "1", Status: approval.StatusPending, CreatedAt: 1000},
+			{ID: "2", Status: approval.StatusPending, CreatedAt: 3000},
+			{ID: "3", Status: approval.StatusPending, CreatedAt: 2000},
+		}
+
+		pending, _, _ := groupAndSortRecords(records)
+
+		// Newest first (descending)
+		assert.Equal(t, "2", pending[0].ID, "First should be ID 2 with CreatedAt 3000")
+		assert.Equal(t, "3", pending[1].ID, "Second should be ID 3 with CreatedAt 2000")
+		assert.Equal(t, "1", pending[2].ID, "Third should be ID 1 with CreatedAt 1000")
+	})
+
+	t.Run("sorts decided by DecidedAt descending", func(t *testing.T) {
+		records := []*approval.ApprovalRecord{
+			{ID: "1", Status: approval.StatusApproved, DecidedAt: 1000},
+			{ID: "2", Status: approval.StatusDenied, DecidedAt: 3000},
+			{ID: "3", Status: approval.StatusApproved, DecidedAt: 2000},
+		}
+
+		_, decided, _ := groupAndSortRecords(records)
+
+		// Newest first (descending)
+		assert.Equal(t, "2", decided[0].ID, "First should be ID 2 with DecidedAt 3000")
+		assert.Equal(t, "3", decided[1].ID, "Second should be ID 3 with DecidedAt 2000")
+		assert.Equal(t, "1", decided[2].ID, "Third should be ID 1 with DecidedAt 1000")
+	})
+
+	t.Run("sorts canceled by CanceledAt descending", func(t *testing.T) {
+		records := []*approval.ApprovalRecord{
+			{ID: "1", Status: approval.StatusCanceled, CanceledAt: 1000, CreatedAt: 5000},
+			{ID: "2", Status: approval.StatusCanceled, CanceledAt: 3000, CreatedAt: 6000},
+			{ID: "3", Status: approval.StatusCanceled, CanceledAt: 2000, CreatedAt: 7000},
+		}
+
+		_, _, canceled := groupAndSortRecords(records)
+
+		// Newest first (descending by CanceledAt)
+		assert.Equal(t, "2", canceled[0].ID, "First should be ID 2 with CanceledAt 3000")
+		assert.Equal(t, "3", canceled[1].ID, "Second should be ID 3 with CanceledAt 2000")
+		assert.Equal(t, "1", canceled[2].ID, "Third should be ID 1 with CanceledAt 1000")
+	})
+
+	t.Run("falls back to CreatedAt when CanceledAt is zero", func(t *testing.T) {
+		records := []*approval.ApprovalRecord{
+			{ID: "1", Status: approval.StatusCanceled, CanceledAt: 0, CreatedAt: 5000},
+			{ID: "2", Status: approval.StatusCanceled, CanceledAt: 3000, CreatedAt: 1000},
+			{ID: "3", Status: approval.StatusCanceled, CanceledAt: 0, CreatedAt: 7000},
+		}
+
+		_, _, canceled := groupAndSortRecords(records)
+
+		// Should sort: ID 3 (CreatedAt 7000), ID 1 (CreatedAt 5000), ID 2 (CanceledAt 3000)
+		assert.Equal(t, "3", canceled[0].ID, "First should be ID 3 with CreatedAt 7000")
+		assert.Equal(t, "1", canceled[1].ID, "Second should be ID 1 with CreatedAt 5000")
+		assert.Equal(t, "2", canceled[2].ID, "Third should be ID 2 with CanceledAt 3000")
+	})
+
+	t.Run("handles empty input", func(t *testing.T) {
+		records := []*approval.ApprovalRecord{}
+
+		pending, decided, canceled := groupAndSortRecords(records)
+
+		assert.Equal(t, 0, len(pending))
+		assert.Equal(t, 0, len(decided))
+		assert.Equal(t, 0, len(canceled))
+	})
+}
+
+func TestFormatListResponse_GroupedSections(t *testing.T) {
+	t.Run("displays all three sections with headers", func(t *testing.T) {
+		records := []*approval.ApprovalRecord{
+			{
+				Code:              "A-PND1",
+				Status:            approval.StatusPending,
+				RequesterUsername: "alice",
+				ApproverUsername:  "bob",
+				CreatedAt:         1704897000000,
+			},
+			{
+				Code:              "A-APP1",
+				Status:            approval.StatusApproved,
+				RequesterUsername: "charlie",
+				ApproverUsername:  "diane",
+				CreatedAt:         1704897000000,
+				DecidedAt:         1704897100000,
+			},
+			{
+				Code:              "A-CAN1",
+				Status:            approval.StatusCanceled,
+				RequesterUsername: "eve",
+				ApproverUsername:  "frank",
+				CreatedAt:         1704897000000,
+				CanceledAt:        1704897200000,
+				CanceledReason:    "No longer needed",
+			},
+		}
+
+		result := formatListResponse(records, 3)
+
+		// Verify section headers appear in correct order
+		assert.Contains(t, result, "**Pending Approvals:**")
+		assert.Contains(t, result, "**Decided Approvals:**")
+		assert.Contains(t, result, "**Canceled Requests:**")
+
+		// Verify order of sections (pending before decided before canceled)
+		pendingIdx := strings.Index(result, "**Pending Approvals:**")
+		decidedIdx := strings.Index(result, "**Decided Approvals:**")
+		canceledIdx := strings.Index(result, "**Canceled Requests:**")
+
+		assert.True(t, pendingIdx < decidedIdx, "Pending should come before Decided")
+		assert.True(t, decidedIdx < canceledIdx, "Decided should come before Canceled")
+
+		// Verify records appear in correct sections
+		assert.Contains(t, result, "A-PND1")
+		assert.Contains(t, result, "A-APP1")
+		assert.Contains(t, result, "A-CAN1")
+	})
+
+	t.Run("omits empty sections", func(t *testing.T) {
+		// Only pending records
+		records := []*approval.ApprovalRecord{
+			{
+				Code:              "A-PND1",
+				Status:            approval.StatusPending,
+				RequesterUsername: "alice",
+				ApproverUsername:  "bob",
+				CreatedAt:         1704897000000,
+			},
+		}
+
+		result := formatListResponse(records, 1)
+
+		assert.Contains(t, result, "**Pending Approvals:**")
+		assert.NotContains(t, result, "**Decided Approvals:**")
+		assert.NotContains(t, result, "**Canceled Requests:**")
+	})
+
+	t.Run("displays canceled reason in list view", func(t *testing.T) {
+		records := []*approval.ApprovalRecord{
+			{
+				Code:              "A-CAN1",
+				Status:            approval.StatusCanceled,
+				RequesterUsername: "alice",
+				ApproverUsername:  "bob",
+				CreatedAt:         1704897000000,
+				CanceledAt:        1704897100000,
+				CanceledReason:    "No longer needed",
+			},
+		}
+
+		result := formatListResponse(records, 1)
+
+		assert.Contains(t, result, "🚫 Canceled (No longer needed)")
+	})
+
+	t.Run("truncates long cancellation reasons", func(t *testing.T) {
+		longReason := "No longer needed - project was canceled by stakeholder team and requirements changed significantly"
+
+		records := []*approval.ApprovalRecord{
+			{
+				Code:              "A-CAN1",
+				Status:            approval.StatusCanceled,
+				RequesterUsername: "alice",
+				ApproverUsername:  "bob",
+				CreatedAt:         1704897000000,
+				CanceledAt:        1704897100000,
+				CanceledReason:    longReason,
+			},
+		}
+
+		result := formatListResponse(records, 1)
+
+		// Should truncate to 37 chars + "..." (exact first 37 characters)
+		assert.Contains(t, result, "🚫 Canceled (No longer needed - project was cancel...)")
+		assert.NotContains(t, result, longReason)
+	})
+
+	t.Run("displays canceled without reason for old records", func(t *testing.T) {
+		records := []*approval.ApprovalRecord{
+			{
+				Code:              "A-CAN1",
+				Status:            approval.StatusCanceled,
+				RequesterUsername: "alice",
+				ApproverUsername:  "bob",
+				CreatedAt:         1704897000000,
+				CanceledAt:        0,
+				CanceledReason:    "",
+			},
+		}
+
+		result := formatListResponse(records, 1)
+
+		// Should show without reason text or parentheses
+		assert.Contains(t, result, "🚫 Canceled")
+		assert.NotContains(t, result, "🚫 Canceled ()")
+	})
+
+	t.Run("respects 20-record limit across all groups", func(t *testing.T) {
+		var records []*approval.ApprovalRecord
+
+		// Create 10 pending, 10 decided, 10 canceled (30 total)
+		for i := range 10 {
+			records = append(records, &approval.ApprovalRecord{
+				Code:              fmt.Sprintf("A-PND%d", i),
+				Status:            approval.StatusPending,
+				RequesterUsername: "alice",
+				ApproverUsername:  "bob",
+				CreatedAt:         int64(1704897000000 + i*1000),
+			})
+		}
+		for i := range 10 {
+			records = append(records, &approval.ApprovalRecord{
+				Code:              fmt.Sprintf("A-APP%d", i),
+				Status:            approval.StatusApproved,
+				RequesterUsername: "charlie",
+				ApproverUsername:  "diane",
+				CreatedAt:         int64(1704897000000 + i*1000),
+				DecidedAt:         int64(1704897100000 + i*1000),
+			})
+		}
+		for i := range 10 {
+			records = append(records, &approval.ApprovalRecord{
+				Code:              fmt.Sprintf("A-CAN%d", i),
+				Status:            approval.StatusCanceled,
+				RequesterUsername: "eve",
+				ApproverUsername:  "frank",
+				CreatedAt:         int64(1704897000000 + i*1000),
+				CanceledAt:        int64(1704897200000 + i*1000),
+				CanceledReason:    "Reason",
+			})
+		}
+
+		result := formatListResponse(records, 30)
+
+		// Count record codes in output (each appears once)
+		recordCount := 0
+		for i := range 10 {
+			if strings.Contains(result, fmt.Sprintf("A-PND%d", i)) {
+				recordCount++
+			}
+			if strings.Contains(result, fmt.Sprintf("A-APP%d", i)) {
+				recordCount++
+			}
+			if strings.Contains(result, fmt.Sprintf("A-CAN%d", i)) {
+				recordCount++
+			}
+		}
+
+		assert.LessOrEqual(t, recordCount, 20, "Should display at most 20 records")
+
+		// Should show pagination footer
+		assert.Contains(t, result, "Showing")
+		assert.Contains(t, result, "of 30 total records")
+	})
+
+	t.Run("updates pagination footer correctly", func(t *testing.T) {
+		var records []*approval.ApprovalRecord
+		for i := range 15 {
+			records = append(records, &approval.ApprovalRecord{
+				Code:              fmt.Sprintf("A-TST%d", i),
+				Status:            approval.StatusPending,
+				RequesterUsername: "alice",
+				ApproverUsername:  "bob",
+				CreatedAt:         int64(1704897000000 + i*1000),
+			})
+		}
+
+		result := formatListResponse(records, 25)
+
+		// Should show "Showing 15 of 25"
+		assert.Contains(t, result, "Showing 15 of 25 total records")
+	})
+
+	t.Run("omits footer when all records shown", func(t *testing.T) {
+		records := []*approval.ApprovalRecord{
+			{
+				Code:              "A-TST1",
+				Status:            approval.StatusPending,
+				RequesterUsername: "alice",
+				ApproverUsername:  "bob",
+				CreatedAt:         1704897000000,
+			},
+		}
+
+		result := formatListResponse(records, 1)
+
+		// Should NOT show pagination footer
+		assert.NotContains(t, result, "Showing")
+		assert.NotContains(t, result, "total records")
+	})
+
+	t.Run("displays all four cancellation reasons correctly", func(t *testing.T) {
+		reasons := []string{
+			"No longer needed",
+			"Changed requirements",
+			"Created by mistake",
+			"Other: Custom explanation text",
+		}
+
+		for _, reason := range reasons {
+			records := []*approval.ApprovalRecord{
+				{
+					Code:              "A-CAN1",
+					Status:            approval.StatusCanceled,
+					RequesterUsername: "alice",
+					ApproverUsername:  "bob",
+					CreatedAt:         1704897000000,
+					CanceledAt:        1704897100000,
+					CanceledReason:    reason,
+				},
+			}
+
+			result := formatListResponse(records, 1)
+
+			assert.Contains(t, result, fmt.Sprintf("🚫 Canceled (%s)", reason),
+				"Should display reason: %s", reason)
+		}
+	})
+}
+
+func TestFormatListResponse_UTF8Handling(t *testing.T) {
+	testCases := []struct {
+		name           string
+		reason         string
+		expectedOutput string
+	}{
+		{
+			name:           "emoji in reason - truncated",
+			reason:         "Changed requirements 🎯 using new approach",
+			expectedOutput: "🚫 Canceled (Changed requirements 🎯 using new appr...)",
+		},
+		{
+			name:           "emoji truncation at boundary",
+			reason:         "No longer needed - project canceled 🚫🚫 with extra text that makes this very long",
+			expectedOutput: "🚫 Canceled (No longer needed - project canceled 🚫...)",
+		},
+		{
+			name:           "CJK characters",
+			reason:         "要求が変更されました - 新しいアプローチを使用します",
+			expectedOutput: "🚫 Canceled (要求が変更されました - 新しいアプローチを使用します)",
+		},
+		{
+			name:           "accented characters",
+			reason:         "Besoin supprimé - exigences modifiées",
+			expectedOutput: "🚫 Canceled (Besoin supprimé - exigences modifiées)",
+		},
+		{
+			name:           "CJK text exactly 40 characters - not truncated",
+			reason:         "要求が変更されました新しいアプローチを使用しますこれはテストです長いテキストです",
+			expectedOutput: "🚫 Canceled (要求が変更されました新しいアプローチを使用しますこれはテストです長いテキストです)",
+		},
+		{
+			name:           "CJK text over 40 characters - truncated",
+			reason:         "要求が変更されました新しいアプローチを使用しますこれはテストです長いテキストですさらに追加",
+			expectedOutput: "🚫 Canceled (要求が変更されました新しいアプローチを使用しますこれはテストです長いテキス...)",
+		},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			records := []*approval.ApprovalRecord{
+				{
+					Code:              "A-CAN1",
+					Status:            approval.StatusCanceled,
+					RequesterUsername: "alice",
+					ApproverUsername:  "bob",
+					CreatedAt:         1704897000000,
+					CanceledAt:        1704897100000,
+					CanceledReason:    tc.reason,
+				},
+			}
+
+			result := formatListResponse(records, 1)
+			assert.Contains(t, result, tc.expectedOutput,
+				"Should handle UTF-8 characters correctly")
+		})
+	}
 }

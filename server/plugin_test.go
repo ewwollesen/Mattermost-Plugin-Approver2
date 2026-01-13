@@ -131,7 +131,8 @@ func TestHandleCancelCommand(t *testing.T) {
 		assert.Contains(t, resp.Text, "Usage: /approve cancel <APPROVAL_ID>")
 	})
 
-	t.Run("successful cancellation shows confirmation", func(t *testing.T) {
+	t.Run("cancel command opens modal (Story 4.3)", func(t *testing.T) {
+		// Story 4.3: Cancel command now opens modal instead of immediate cancellation
 		api := &plugintest.API{}
 
 		// Mock plugin activation
@@ -153,37 +154,15 @@ func TestHandleCancelCommand(t *testing.T) {
 		}`
 		api.On("KVGet", "approval:record:record123").Return([]byte(recordJSON), nil)
 
-		// Mock save approval (will update status to canceled)
-		api.On("KVSet", "approval:record:record123", mock.Anything).Return(nil)
-		api.On("KVSet", "approval:code:A-X7K9Q2", mock.Anything).Return(nil)
-		// Mock requester and approver index KVSet calls
-		api.On("KVSet", mock.MatchedBy(func(key string) bool {
-			return len(key) > 15 && key[:15] == "approval:index:"
-		}), mock.Anything).Return(nil)
-
-		// Mock GetUser for requester (needed for post update)
-		api.On("GetUser", "user123").Return(&model.User{
-			Id:       "user123",
-			Username: "testuser",
-		}, nil)
-
-		// Mock GetPost and UpdatePost for approver notification update (Story 4.1)
-		api.On("GetPost", mock.Anything).Return(&model.Post{
-			Id:      "notification_post_123",
-			Message: "Original message",
-			Props:   model.StringInterface{},
-		}, nil).Maybe()
-		api.On("UpdatePost", mock.Anything).Return(&model.Post{}, nil).Maybe()
-
-		// Mock ephemeral post
-		api.On("SendEphemeralPost", "user123", mock.MatchedBy(func(post *model.Post) bool {
-			return post.ChannelId == "channel123" &&
-				post.Message == "✅ Approval request `A-X7K9Q2` has been canceled."
-		})).Return(&model.Post{})
+		// Mock OpenInteractiveDialog - modal should open
+		api.On("OpenInteractiveDialog", mock.MatchedBy(func(req model.OpenDialogRequest) bool {
+			return req.Dialog.CallbackId == "cancel_approval_record123" &&
+				req.Dialog.Title == "Cancel Approval Request"
+		})).Return(nil)
 
 		// Mock logging
-		api.On("LogInfo", mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return()
-		api.On("LogWarn", mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything).Maybe()
+		api.On("LogInfo", mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything).Maybe()
+		api.On("LogError", mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything).Maybe()
 
 		p := &Plugin{}
 		p.SetAPI(api)
@@ -194,6 +173,7 @@ func TestHandleCancelCommand(t *testing.T) {
 			Command:   "/approve cancel A-X7K9Q2",
 			UserId:    "user123",
 			ChannelId: "channel123",
+			TriggerId: "trigger123",
 		}
 
 		resp, appErr := p.ExecuteCommand(nil, args)
@@ -225,12 +205,6 @@ func TestHandleCancelCommand(t *testing.T) {
 		}`
 		api.On("KVGet", "approval:record:record123").Return([]byte(recordJSON), nil)
 
-		// Mock GetUser for requester (called before permission check)
-		api.On("GetUser", "user456").Return(&model.User{
-			Id:       "user456",
-			Username: "otheruser",
-		}, nil)
-
 		// Mock error logging
 		api.On("LogError", mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return()
 		api.On("LogInfo", mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return()
@@ -256,7 +230,9 @@ func TestHandleCancelCommand(t *testing.T) {
 		api.AssertExpectations(t)
 	})
 
-	t.Run("cannot cancel approved approval", func(t *testing.T) {
+	t.Run("modal opens for approved approval (validation on submit)", func(t *testing.T) {
+		// Story 4.3: Modal opens even for approved approvals
+		// Validation happens when modal is submitted
 		api := &plugintest.API{}
 
 		// Mock plugin activation
@@ -277,15 +253,12 @@ func TestHandleCancelCommand(t *testing.T) {
 		}`
 		api.On("KVGet", "approval:record:record123").Return([]byte(recordJSON), nil)
 
-		// Mock GetUser for requester (called before validation)
-		api.On("GetUser", "user123").Return(&model.User{
-			Id:       "user123",
-			Username: "testuser",
-		}, nil)
+		// Mock OpenInteractiveDialog - modal still opens
+		api.On("OpenInteractiveDialog", mock.AnythingOfType("model.OpenDialogRequest")).Return(nil)
 
 		// Mock logging
-		api.On("LogError", mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return()
-		api.On("LogInfo", mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return()
+		api.On("LogError", mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything).Maybe()
+		api.On("LogInfo", mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything).Maybe()
 
 		p := &Plugin{}
 		p.SetAPI(api)
@@ -296,14 +269,13 @@ func TestHandleCancelCommand(t *testing.T) {
 			Command:   "/approve cancel A-X7K9Q2",
 			UserId:    "user123",
 			ChannelId: "channel123",
+			TriggerId: "trigger123",
 		}
 
 		resp, appErr := p.ExecuteCommand(nil, args)
 		assert.Nil(t, appErr)
 		assert.NotNil(t, resp)
 		assert.Equal(t, model.CommandResponseTypeEphemeral, resp.ResponseType)
-		assert.Contains(t, resp.Text, "❌ Cannot cancel")
-		assert.Contains(t, resp.Text, "Status is already approved")
 
 		api.AssertExpectations(t)
 	})
@@ -317,12 +289,6 @@ func TestHandleCancelCommand(t *testing.T) {
 
 		// Mock KV store operations - code not found
 		api.On("KVGet", "approval:code:Z-NOTFND").Return(nil, nil)
-
-		// Mock GetUser for requester (called before code lookup)
-		api.On("GetUser", "user123").Return(&model.User{
-			Id:       "user123",
-			Username: "testuser",
-		}, nil)
 
 		// Mock logging
 		api.On("LogError", mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return()
@@ -349,81 +315,9 @@ func TestHandleCancelCommand(t *testing.T) {
 		api.AssertExpectations(t)
 	})
 
-	t.Run("ephemeral post fallback works", func(t *testing.T) {
-		api := &plugintest.API{}
-
-		// Mock plugin activation
-		api.On("EnsureBotUser", mock.AnythingOfType("*model.Bot")).Return("bot123", nil)
-		api.On("RegisterCommand", mock.AnythingOfType("*model.Command")).Return(nil)
-
-		// Mock KV store operations
-		api.On("KVGet", "approval:code:A-X7K9Q2").Return([]byte(`"record123"`), nil)
-
-		recordJSON := `{
-			"id": "record123",
-			"code": "A-X7K9Q2",
-			"requesterId": "user123",
-			"status": "pending",
-			"createdAt": 1704931200000,
-			"decidedAt": 0,
-			"schemaVersion": 1
-		}`
-		api.On("KVGet", "approval:record:record123").Return([]byte(recordJSON), nil)
-
-		// Mock save operations
-		api.On("KVSet", "approval:record:record123", mock.Anything).Return(nil)
-		api.On("KVSet", "approval:code:A-X7K9Q2", mock.Anything).Return(nil)
-		// Mock requester and approver index KVSet calls
-		api.On("KVSet", mock.MatchedBy(func(key string) bool {
-			return len(key) > 15 && key[:15] == "approval:index:"
-		}), mock.Anything).Return(nil)
-
-		// Mock GetUser for requester (needed for post update)
-		api.On("GetUser", "user123").Return(&model.User{
-			Id:       "user123",
-			Username: "testuser",
-		}, nil)
-
-		// Mock GetPost and UpdatePost for approver notification update (Story 4.1)
-		api.On("GetPost", mock.Anything).Return(&model.Post{
-			Id:      "notification_post_123",
-			Message: "Original message",
-			Props:   model.StringInterface{},
-		}, nil).Maybe()
-		api.On("UpdatePost", mock.Anything).Return(&model.Post{}, nil).Maybe()
-
-		// Mock ephemeral post failure (returns nil)
-		api.On("SendEphemeralPost", "user123", mock.Anything).Return(nil)
-
-		// Mock fallback to CreatePost
-		api.On("CreatePost", mock.MatchedBy(func(post *model.Post) bool {
-			return post.UserId == "user123" &&
-				post.ChannelId == "channel123" &&
-				post.Message == "✅ Approval request `A-X7K9Q2` has been canceled."
-		})).Return(&model.Post{}, nil)
-
-		// Mock logging
-		api.On("LogError", mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return()
-		api.On("LogInfo", mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return()
-		api.On("LogWarn", mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything).Maybe()
-
-		p := &Plugin{}
-		p.SetAPI(api)
-		err := p.OnActivate()
-		assert.NoError(t, err)
-
-		args := &model.CommandArgs{
-			Command:   "/approve cancel A-X7K9Q2",
-			UserId:    "user123",
-			ChannelId: "channel123",
-		}
-
-		resp, appErr := p.ExecuteCommand(nil, args)
-		assert.Nil(t, appErr)
-		assert.NotNil(t, resp)
-
-		api.AssertExpectations(t)
-	})
+	// Story 4.3: Removed "ephemeral post fallback works" test - no longer applicable
+	// since cancel command now opens a modal instead of immediately canceling.
+	// Fallback behavior (if needed) would be in modal submission handler, not command handler.
 
 	t.Run("extra arguments rejected", func(t *testing.T) {
 		api := &plugintest.API{}
@@ -444,18 +338,17 @@ func TestHandleCancelCommand(t *testing.T) {
 		assert.Contains(t, resp.Text, "Too many arguments")
 	})
 
-	t.Run("invalid code format shows error", func(t *testing.T) {
+	// Story 4.3: Updated test - format validation moved to modal submission
+	// Command handler only validates approval exists before opening modal
+	t.Run("non-existent code shows not found error", func(t *testing.T) {
 		api := &plugintest.API{}
 
 		// Mock plugin activation
 		api.On("EnsureBotUser", mock.AnythingOfType("*model.Bot")).Return("bot123", nil)
 		api.On("RegisterCommand", mock.AnythingOfType("*model.Command")).Return(nil)
 
-		// Mock GetUser for requester (called before validation)
-		api.On("GetUser", "user123").Return(&model.User{
-			Id:       "user123",
-			Username: "testuser",
-		}, nil)
+		// Mock KV lookup for non-existent code (returns nil = not found)
+		api.On("KVGet", "approval:code:A-NOTFND").Return(nil, nil)
 
 		// Mock logging
 		api.On("LogError", mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return()
@@ -467,7 +360,7 @@ func TestHandleCancelCommand(t *testing.T) {
 		assert.NoError(t, err)
 
 		args := &model.CommandArgs{
-			Command:   "/approve cancel invalid-format",
+			Command:   "/approve cancel A-NOTFND",
 			UserId:    "user123",
 			ChannelId: "channel123",
 		}
@@ -476,8 +369,8 @@ func TestHandleCancelCommand(t *testing.T) {
 		assert.Nil(t, appErr)
 		assert.NotNil(t, resp)
 		assert.Equal(t, model.CommandResponseTypeEphemeral, resp.ResponseType)
-		assert.Contains(t, resp.Text, "❌ Invalid approval code format")
-		assert.Contains(t, resp.Text, "Expected format like 'A-X7K9Q2'")
+		assert.Contains(t, resp.Text, "❌ Approval request 'A-NOTFND' not found")
+		assert.Contains(t, resp.Text, "Use `/approve list` to see your requests")
 
 		api.AssertExpectations(t)
 	})

@@ -980,13 +980,13 @@ func TestUpdateApprovalPostForCancellation(t *testing.T) {
 		})).Return(&model.Post{Id: "post_123"}, nil)
 
 		record := &approval.ApprovalRecord{
-			ID:                  "record123",
-			Code:                "A-X7K9Q2",
-			RequesterUsername:   "alice",
-			Description:         "Test description",
-			Status:              approval.StatusCanceled,
-			CanceledAt:          1704988800000, // 2024-01-11 12:00:00 UTC
-			NotificationPostID:  "post_123",
+			ID:                 "record123",
+			Code:               "A-X7K9Q2",
+			RequesterUsername:  "alice",
+			Description:        "Test description",
+			Status:             approval.StatusCanceled,
+			CanceledAt:         1704988800000, // 2024-01-11 12:00:00 UTC
+			NotificationPostID: "post_123",
 		}
 
 		err := UpdateApprovalPostForCancellation(api, record, "alice")
@@ -1012,13 +1012,13 @@ func TestUpdateApprovalPostForCancellation(t *testing.T) {
 		})).Return(&model.Post{Id: "post_123"}, nil)
 
 		record := &approval.ApprovalRecord{
-			ID:                  "record123",
-			Code:                "A-X7K9Q2",
-			RequesterUsername:   "alice",
-			Description:         "Deploy to production",
-			Status:              approval.StatusCanceled,
-			CanceledAt:          1704988800000,
-			NotificationPostID:  "post_123",
+			ID:                 "record123",
+			Code:               "A-X7K9Q2",
+			RequesterUsername:  "alice",
+			Description:        "Deploy to production",
+			Status:             approval.StatusCanceled,
+			CanceledAt:         1704988800000,
+			NotificationPostID: "post_123",
 		}
 
 		err := UpdateApprovalPostForCancellation(api, record, "alice")
@@ -1057,13 +1057,13 @@ func TestUpdateApprovalPostForCancellation(t *testing.T) {
 		})).Return(&model.Post{Id: "post_123"}, nil)
 
 		record := &approval.ApprovalRecord{
-			ID:                  "record123",
-			Code:                "A-X7K9Q2",
-			RequesterUsername:   "alice",
-			Description:         "Test",
-			Status:              approval.StatusCanceled,
-			CanceledAt:          1704988800000,
-			NotificationPostID:  "post_123",
+			ID:                 "record123",
+			Code:               "A-X7K9Q2",
+			RequesterUsername:  "alice",
+			Description:        "Test",
+			Status:             approval.StatusCanceled,
+			CanceledAt:         1704988800000,
+			NotificationPostID: "post_123",
 		}
 
 		err := UpdateApprovalPostForCancellation(api, record, "alice")
@@ -1090,13 +1090,13 @@ func TestUpdateApprovalPostForCancellation(t *testing.T) {
 		})).Return(&model.Post{Id: "post_123"}, nil)
 
 		record := &approval.ApprovalRecord{
-			ID:                  "record123",
-			Code:                "A-X7K9Q2",
-			RequesterUsername:   "alice",
-			Description:         "Test",
-			Status:              approval.StatusCanceled,
-			CanceledAt:          1704988800000, // 2024-01-11 12:00:00 UTC
-			NotificationPostID:  "post_123",
+			ID:                 "record123",
+			Code:               "A-X7K9Q2",
+			RequesterUsername:  "alice",
+			Description:        "Test",
+			Status:             approval.StatusCanceled,
+			CanceledAt:         1704988800000, // 2024-01-11 12:00:00 UTC
+			NotificationPostID: "post_123",
 		}
 
 		err := UpdateApprovalPostForCancellation(api, record, "alice")
@@ -1125,13 +1125,13 @@ func TestUpdateApprovalPostForCancellation(t *testing.T) {
 		})).Return(&model.Post{Id: "post_123"}, nil)
 
 		record := &approval.ApprovalRecord{
-			ID:                  "record123",
-			Code:                "A-X7K9Q2",
-			RequesterUsername:   "alice",
-			Description:         "Test",
-			Status:              approval.StatusCanceled,
-			CanceledAt:          1704988800000,
-			NotificationPostID:  "post_123",
+			ID:                 "record123",
+			Code:               "A-X7K9Q2",
+			RequesterUsername:  "alice",
+			Description:        "Test",
+			Status:             approval.StatusCanceled,
+			CanceledAt:         1704988800000,
+			NotificationPostID: "post_123",
 		}
 
 		err := UpdateApprovalPostForCancellation(api, record, "bob")
@@ -1147,13 +1147,13 @@ func TestUpdateApprovalPostForCancellation(t *testing.T) {
 		api.On("LogWarn", "Cannot update approver post: no post ID stored", "request_id", "record123").Return()
 
 		record := &approval.ApprovalRecord{
-			ID:                  "record123",
-			Code:                "A-X7K9Q2",
-			RequesterUsername:   "alice",
-			Description:         "Test",
-			Status:              approval.StatusCanceled,
-			CanceledAt:          1704988800000,
-			NotificationPostID:  "", // Empty post ID
+			ID:                 "record123",
+			Code:               "A-X7K9Q2",
+			RequesterUsername:  "alice",
+			Description:        "Test",
+			Status:             approval.StatusCanceled,
+			CanceledAt:         1704988800000,
+			NotificationPostID: "", // Empty post ID
 		}
 
 		err := UpdateApprovalPostForCancellation(api, record, "alice")
@@ -1170,13 +1170,13 @@ func TestUpdateApprovalPostForCancellation(t *testing.T) {
 		api.On("LogError", "Failed to get post for update", "post_id", "post_123", "error", "post not found").Return()
 
 		record := &approval.ApprovalRecord{
-			ID:                  "record123",
-			Code:                "A-X7K9Q2",
-			RequesterUsername:   "alice",
-			Description:         "Test",
-			Status:              approval.StatusCanceled,
-			CanceledAt:          1704988800000,
-			NotificationPostID:  "post_123",
+			ID:                 "record123",
+			Code:               "A-X7K9Q2",
+			RequesterUsername:  "alice",
+			Description:        "Test",
+			Status:             approval.StatusCanceled,
+			CanceledAt:         1704988800000,
+			NotificationPostID: "post_123",
 		}
 
 		err := UpdateApprovalPostForCancellation(api, record, "alice")
@@ -1200,13 +1200,13 @@ func TestUpdateApprovalPostForCancellation(t *testing.T) {
 		api.On("LogError", "Failed to update post", "post_id", "post_123", "error", "network error").Return()
 
 		record := &approval.ApprovalRecord{
-			ID:                  "record123",
-			Code:                "A-X7K9Q2",
-			RequesterUsername:   "alice",
-			Description:         "Test",
-			Status:              approval.StatusCanceled,
-			CanceledAt:          1704988800000,
-			NotificationPostID:  "post_123",
+			ID:                 "record123",
+			Code:               "A-X7K9Q2",
+			RequesterUsername:  "alice",
+			Description:        "Test",
+			Status:             approval.StatusCanceled,
+			CanceledAt:         1704988800000,
+			NotificationPostID: "post_123",
 		}
 
 		err := UpdateApprovalPostForCancellation(api, record, "alice")
@@ -1242,13 +1242,13 @@ func TestUpdateApprovalPostForCancellation(t *testing.T) {
 		})).Return(&model.Post{Id: "post_123"}, nil)
 
 		record := &approval.ApprovalRecord{
-			ID:                  "record123",
-			Code:                "A-X7K9Q2",
-			RequesterUsername:   "alice",
-			Description:         "Deploy hotfix to production",
-			Status:              approval.StatusCanceled,
-			CanceledAt:          1704988800000,
-			NotificationPostID:  "post_123",
+			ID:                 "record123",
+			Code:               "A-X7K9Q2",
+			RequesterUsername:  "alice",
+			Description:        "Deploy hotfix to production",
+			Status:             approval.StatusCanceled,
+			CanceledAt:         1704988800000,
+			NotificationPostID: "post_123",
 		}
 
 		err := UpdateApprovalPostForCancellation(api, record, "alice")

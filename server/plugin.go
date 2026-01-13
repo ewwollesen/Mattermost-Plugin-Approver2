@@ -7,7 +7,6 @@ import (
 
 	"github.com/mattermost/mattermost-plugin-approver2/server/approval"
 	"github.com/mattermost/mattermost-plugin-approver2/server/command"
-	"github.com/mattermost/mattermost-plugin-approver2/server/notifications"
 	"github.com/mattermost/mattermost-plugin-approver2/server/store"
 	"github.com/mattermost/mattermost/server/public/model"
 	"github.com/mattermost/mattermost/server/public/plugin"
@@ -115,6 +114,7 @@ func (p *Plugin) ExecuteCommand(c *plugin.Context, args *model.CommandArgs) (*mo
 }
 
 // handleCancelCommand processes the /approve cancel <ID> command
+// Story 4.3: Opens a modal to collect cancellation reason instead of immediate cancel
 func (p *Plugin) handleCancelCommand(args *model.CommandArgs, split []string) *model.CommandResponse {
 	// Validate command format: /approve cancel <ID>
 	if len(split) < 3 {
@@ -135,28 +135,11 @@ func (p *Plugin) handleCancelCommand(args *model.CommandArgs, split []string) *m
 	approvalCode := split[2]
 	requesterID := args.UserId
 
-	// TODO (Story 4.3): Replace with modal to collect cancellation reason
-	// For now, use default reason until modal is implemented
-	reason := "No longer needed"
-
-	// Get the requester user for post update
-	requester, appErr := p.API.GetUser(requesterID)
-	if appErr != nil {
-		p.API.LogError("Failed to get requester user",
-			"error", appErr.Error(),
-			"user_id", requesterID,
-		)
-		return &model.CommandResponse{
-			ResponseType: model.CommandResponseTypeEphemeral,
-			Text:         "Failed to retrieve user information. Please try again.",
-		}
-	}
-
-	// Call service to cancel approval
-	err := p.service.CancelApproval(approvalCode, requesterID, reason)
+	// Validate approval exists and get record BEFORE opening modal
+	record, err := p.store.GetByCode(approvalCode)
 	if err != nil {
 		// Log error with context
-		p.API.LogError("Failed to cancel approval",
+		p.API.LogError("Failed to get approval record for cancellation",
 			"error", err.Error(),
 			"approval_code", approvalCode,
 			"user_id", requesterID,
@@ -171,73 +154,83 @@ func (p *Plugin) handleCancelCommand(args *model.CommandArgs, split []string) *m
 		}
 	}
 
-	// Update the approver's DM post to show cancellation (Story 4.1)
-	// Get the updated record with cancellation data
-	updatedRecord, err := p.store.GetByCode(approvalCode)
-	if err != nil {
-		p.API.LogWarn("Failed to retrieve updated record for post update",
+	// Verify user is the requester (permission check)
+	if record.RequesterID != requesterID {
+		p.API.LogError("Unauthorized cancellation attempt",
+			"approval_code", approvalCode,
+			"authenticated_user", requesterID,
+			"requester_id", record.RequesterID,
+		)
+		return &model.CommandResponse{
+			ResponseType: model.CommandResponseTypeEphemeral,
+			Text:         "❌ Permission denied. You can only cancel your own approval requests.",
+		}
+	}
+
+	// Open cancellation modal (Story 4.3)
+	if err := p.openCancellationModal(args.TriggerId, approvalCode, record); err != nil {
+		p.API.LogError("Failed to open cancellation modal",
 			"error", err.Error(),
 			"approval_code", approvalCode,
-		)
-		// Continue - don't fail the cancellation if post update fails
-	} else {
-		// Update the original post (Story 4.1)
-		err = notifications.UpdateApprovalPostForCancellation(p.API, updatedRecord, requester.Username)
-		if err != nil {
-			p.API.LogWarn("Failed to update approver post",
-				"error", err.Error(),
-				"approval_code", approvalCode,
-				"approver_post_id", updatedRecord.NotificationPostID,
-			)
-			// Continue - post update is best-effort
-		}
-
-		// Send cancellation notification DM (Story 4.2)
-		_, err = notifications.SendCancellationNotificationDM(p.API, p.botUserID, updatedRecord, requester.Username)
-		if err != nil {
-			p.API.LogWarn("Failed to send cancellation notification, cancellation still successful",
-				"error", err.Error(),
-				"approval_id", updatedRecord.ID,
-				"approver_id", updatedRecord.ApproverID,
-			)
-			// Continue - notification is best-effort
-		}
-	}
-
-	// Success - send ephemeral confirmation
-	successMsg := fmt.Sprintf("✅ Approval request `%s` has been canceled.", approvalCode)
-
-	post := &model.Post{
-		UserId:    "",
-		ChannelId: args.ChannelId,
-		Message:   successMsg,
-	}
-
-	ephemeralPost := p.API.SendEphemeralPost(requesterID, post)
-	if ephemeralPost == nil {
-		p.API.LogError("Failed to send ephemeral confirmation post",
 			"user_id", requesterID,
-			"approval_code", approvalCode,
 		)
-		// Fallback to regular post (AC3 pattern from Story 1.6)
-		post.UserId = requesterID
-		if _, appErr := p.API.CreatePost(post); appErr != nil {
-			p.API.LogError("Failed to send fallback confirmation post",
-				"user_id", requesterID,
-				"approval_code", approvalCode,
-				"error", appErr.Error(),
-			)
+		return &model.CommandResponse{
+			ResponseType: model.CommandResponseTypeEphemeral,
+			Text:         "Failed to open cancellation dialog. Please try again.",
 		}
 	}
 
-	p.API.LogInfo("Approval canceled successfully",
-		"approval_code", approvalCode,
-		"user_id", requesterID,
-	)
-
+	// Success - modal opened (actual cancellation happens in modal submission)
 	return &model.CommandResponse{
 		ResponseType: model.CommandResponseTypeEphemeral,
 	}
+}
+
+// openCancellationModal opens an interactive dialog for cancellation reason selection
+// Story 4.3: Collect structured cancellation reasons for data instrumentation
+func (p *Plugin) openCancellationModal(triggerID string, approvalCode string, record *approval.ApprovalRecord) error {
+	// Create interactive dialog
+	dialog := model.OpenDialogRequest{
+		TriggerId: triggerID,
+		URL:       "/plugins/com.mattermost.plugin-approver2/dialog/submit",
+		Dialog: model.Dialog{
+			CallbackId:       fmt.Sprintf("cancel_approval_%s", record.ID),
+			Title:            "Cancel Approval Request",
+			IntroductionText: fmt.Sprintf("You are about to cancel approval request **%s**\n\n**This action cannot be undone.**\n\nPlease select a reason for cancellation:", approvalCode),
+			Elements: []model.DialogElement{
+				{
+					DisplayName: "Reason for cancellation",
+					Name:        "reason_code",
+					Type:        "select",
+					Placeholder: "Select a reason",
+					Options: []*model.PostActionOptions{
+						{Text: "No longer needed", Value: "no_longer_needed"},
+						{Text: "Wrong approver", Value: "wrong_approver"},
+						{Text: "Sensitive information", Value: "sensitive_info"},
+						{Text: "Other reason", Value: "other"},
+					},
+					Default:  "no_longer_needed",
+					Optional: false,
+					HelpText: "Help us understand why requests are cancelled",
+				},
+				{
+					DisplayName: "Additional details (if Other)",
+					Name:        "other_reason_text",
+					Type:        "textarea",
+					Placeholder: "Please explain...",
+					Optional:    true,
+					MaxLength:   500,
+				},
+			},
+			SubmitLabel: "Cancel Request",
+		},
+	}
+
+	if appErr := p.API.OpenInteractiveDialog(dialog); appErr != nil {
+		return fmt.Errorf("failed to open cancellation modal: %w", appErr)
+	}
+
+	return nil
 }
 
 // formatCancelError converts service errors into user-friendly messages
