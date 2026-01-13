@@ -73,7 +73,7 @@ development_status:
   # Epic 4: Improved Cancellation UX + Audit Trail
   epic-4: in-progress
   4-1-update-approver-dm-post-on-cancellation: done
-  4-2-send-cancellation-notification-to-approver: review
+  4-2-send-cancellation-notification-to-approver: done
   4-3-add-cancellation-reason-dropdown: backlog
   4-4-store-cancellation-reason-in-approval-record: done
   4-5-display-cancellation-reason-in-approval-details: backlog
