@@ -71,7 +71,7 @@ development_status:
   epic-3-retrospective: optional
 
   # Epic 4: Improved Cancellation UX + Audit Trail
-  epic-4: in-progress
+  epic-4: done
   4-1-update-approver-dm-post-on-cancellation: done
   4-2-send-cancellation-notification-to-approver: done
   4-3-add-cancellation-reason-dropdown: done
@@ -80,3 +80,9 @@ development_status:
   4-6-show-canceled-requests-in-list-sorted-to-bottom: done
   4-7-fix-ghost-buttons-bug: done
   epic-4-retrospective: optional
+
+  # Epic 5: List Filtering and Default View Optimization
+  epic-5: done
+  5-1-add-filter-parameter-to-list-command: done
+  5-2-change-default-behavior-add-count-display: done
+  epic-5-retrospective: optional

@@ -564,8 +564,9 @@ func TestExecuteList(t *testing.T) {
 		assert.NoError(t, err)
 		assert.NotNil(t, resp)
 		assert.Equal(t, model.CommandResponseTypeEphemeral, resp.ResponseType)
-		assert.Contains(t, resp.Text, "No approval records found")
-		assert.Contains(t, resp.Text, "/approve new")
+		// Story 5.2: Filter-specific empty state message
+		assert.Contains(t, resp.Text, "No pending approval requests")
+		assert.Contains(t, resp.Text, "/approve list all")
 
 		store.AssertExpectations(t)
 	})
@@ -597,7 +598,8 @@ func TestExecuteList(t *testing.T) {
 		resp, err := router.Route(args)
 		assert.NoError(t, err)
 		assert.NotNil(t, resp)
-		assert.Contains(t, resp.Text, "**Your Approval Records:**")
+		// Story 5.2: New header format with count
+		assert.Contains(t, resp.Text, "## Your Approval Requests (1 pending)")
 		assert.Contains(t, resp.Text, "**A-ABC123**")
 		assert.Contains(t, resp.Text, "⏳ Pending")
 		assert.Contains(t, resp.Text, "@alice")
@@ -642,7 +644,7 @@ func TestExecuteList(t *testing.T) {
 		store.On("GetUserApprovals", "user123").Return(records, nil)
 
 		args := &model.CommandArgs{
-			Command: "/approve list",
+			Command: "/approve list all", // Story 5.2: Use explicit 'all' filter to test sorting across all statuses
 			UserId:  "user123",
 		}
 
@@ -759,7 +761,7 @@ func TestExecuteList(t *testing.T) {
 		store.On("GetUserApprovals", "user123").Return(records, nil)
 
 		args := &model.CommandArgs{
-			Command: "/approve list",
+			Command: "/approve list all", // Story 5.2: Use explicit 'all' filter to test access control across all statuses
 			UserId:  "user123",
 		}
 
@@ -835,7 +837,7 @@ func TestExecuteList(t *testing.T) {
 		store.On("GetUserApprovals", "user123").Return(records, nil)
 
 		args := &model.CommandArgs{
-			Command: "/approve list",
+			Command: "/approve list all", // Story 5.2: Use explicit 'all' filter to test both requester and approver records across all statuses
 			UserId:  "user123",
 		}
 
@@ -918,7 +920,7 @@ func TestExecuteList(t *testing.T) {
 		store.On("GetUserApprovals", "user123").Return(records, nil)
 
 		args := &model.CommandArgs{
-			Command: "/approve list",
+			Command: "/approve list all", // Story 5.2: Use explicit 'all' filter to test icons for all status types
 			UserId:  "user123",
 		}
 
@@ -965,6 +967,149 @@ func TestExecuteList(t *testing.T) {
 
 		// Verify timestamp format: YYYY-MM-DD HH:MM
 		assert.Contains(t, resp.Text, "2024-01-10 14:30")
+
+		store.AssertExpectations(t)
+	})
+
+	// Story 5.2: Tests for count display in header
+	t.Run("header count - shows count for pending filter", func(t *testing.T) {
+		api := &plugintest.API{}
+		store := &mockStore{}
+		router := NewRouter(api, store)
+
+		records := []*approval.ApprovalRecord{
+			{
+				ID:                "record1",
+				Code:              "A-PEND1",
+				Status:            approval.StatusPending,
+				RequesterUsername: "alice",
+				ApproverUsername:  "bob",
+				CreatedAt:         1000,
+			},
+			{
+				ID:                "record2",
+				Code:              "A-PEND2",
+				Status:            approval.StatusPending,
+				RequesterUsername: "alice",
+				ApproverUsername:  "bob",
+				CreatedAt:         2000,
+			},
+		}
+		store.On("GetUserApprovals", "user123").Return(records, nil)
+
+		args := &model.CommandArgs{
+			Command: "/approve list", // Defaults to pending
+			UserId:  "user123",
+		}
+
+		resp, err := router.Route(args)
+		assert.NoError(t, err)
+		assert.NotNil(t, resp)
+		// Story 5.2 AC2, AC3: Header should show count
+		assert.Contains(t, resp.Text, "## Your Approval Requests (2 pending)")
+
+		store.AssertExpectations(t)
+	})
+
+	t.Run("header count - shows count for approved filter", func(t *testing.T) {
+		api := &plugintest.API{}
+		store := &mockStore{}
+		router := NewRouter(api, store)
+
+		records := []*approval.ApprovalRecord{
+			{
+				ID:                "record1",
+				Code:              "A-APPR",
+				Status:            approval.StatusApproved,
+				RequesterUsername: "alice",
+				ApproverUsername:  "bob",
+				CreatedAt:         1000,
+				DecidedAt:         1500,
+			},
+		}
+		store.On("GetUserApprovals", "user123").Return(records, nil)
+
+		args := &model.CommandArgs{
+			Command: "/approve list approved",
+			UserId:  "user123",
+		}
+
+		resp, err := router.Route(args)
+		assert.NoError(t, err)
+		assert.NotNil(t, resp)
+		// Story 5.2 AC3: Header should show count with filter type
+		assert.Contains(t, resp.Text, "## Your Approval Requests (1 approved)")
+
+		store.AssertExpectations(t)
+	})
+
+	t.Run("header count - shows count for all filter", func(t *testing.T) {
+		api := &plugintest.API{}
+		store := &mockStore{}
+		router := NewRouter(api, store)
+
+		records := []*approval.ApprovalRecord{
+			{
+				ID:                "record1",
+				Code:              "A-PEND",
+				Status:            approval.StatusPending,
+				RequesterUsername: "alice",
+				ApproverUsername:  "bob",
+				CreatedAt:         1000,
+			},
+			{
+				ID:                "record2",
+				Code:              "A-APPR",
+				Status:            approval.StatusApproved,
+				RequesterUsername: "alice",
+				ApproverUsername:  "bob",
+				CreatedAt:         2000,
+				DecidedAt:         2500,
+			},
+			{
+				ID:                "record3",
+				Code:              "A-DENY",
+				Status:            approval.StatusDenied,
+				RequesterUsername: "alice",
+				ApproverUsername:  "bob",
+				CreatedAt:         3000,
+				DecidedAt:         3500,
+			},
+		}
+		store.On("GetUserApprovals", "user123").Return(records, nil)
+
+		args := &model.CommandArgs{
+			Command: "/approve list all",
+			UserId:  "user123",
+		}
+
+		resp, err := router.Route(args)
+		assert.NoError(t, err)
+		assert.NotNil(t, resp)
+		// Story 5.2 AC3: Header should show total count for "all" filter
+		assert.Contains(t, resp.Text, "## Your Approval Requests (3 all)")
+
+		store.AssertExpectations(t)
+	})
+
+	t.Run("header count - shows zero count", func(t *testing.T) {
+		api := &plugintest.API{}
+		store := &mockStore{}
+		router := NewRouter(api, store)
+
+		records := []*approval.ApprovalRecord{}
+		store.On("GetUserApprovals", "user123").Return(records, nil)
+
+		args := &model.CommandArgs{
+			Command: "/approve list pending",
+			UserId:  "user123",
+		}
+
+		resp, err := router.Route(args)
+		assert.NoError(t, err)
+		assert.NotNil(t, resp)
+		// Story 5.2 AC4: Empty state message for zero count
+		assert.Contains(t, resp.Text, "No pending approval requests")
 
 		store.AssertExpectations(t)
 	})
@@ -1428,7 +1573,7 @@ func TestExecuteGet(t *testing.T) {
 		assert.NotNil(t, resp)
 
 		// Verify fallback text for empty reason (AC5, Subtask 3.2)
-		assert.Contains(t, resp.Text, "**Reason:** No reason recorded (cancelled before v0.2.0)")
+		assert.Contains(t, resp.Text, "**Reason:** No reason recorded (canceled before v0.2.0)")
 
 		// Verify fallback text for zero timestamp (AC6, Subtask 3.3)
 		assert.Contains(t, resp.Text, "**Canceled:** Unknown")
@@ -1742,7 +1887,7 @@ func TestFormatListResponse_GroupedSections(t *testing.T) {
 			},
 		}
 
-		result := formatListResponse(records, 3)
+		result := formatListResponse(records, 3, "all")
 
 		// Verify section headers appear in correct order
 		assert.Contains(t, result, "**Pending Approvals:**")
@@ -1775,7 +1920,7 @@ func TestFormatListResponse_GroupedSections(t *testing.T) {
 			},
 		}
 
-		result := formatListResponse(records, 1)
+		result := formatListResponse(records, 1, "all")
 
 		assert.Contains(t, result, "**Pending Approvals:**")
 		assert.NotContains(t, result, "**Decided Approvals:**")
@@ -1795,7 +1940,7 @@ func TestFormatListResponse_GroupedSections(t *testing.T) {
 			},
 		}
 
-		result := formatListResponse(records, 1)
+		result := formatListResponse(records, 1, "all")
 
 		assert.Contains(t, result, "🚫 Canceled (No longer needed)")
 	})
@@ -1815,7 +1960,7 @@ func TestFormatListResponse_GroupedSections(t *testing.T) {
 			},
 		}
 
-		result := formatListResponse(records, 1)
+		result := formatListResponse(records, 1, "all")
 
 		// Should truncate to 37 chars + "..." (exact first 37 characters)
 		assert.Contains(t, result, "🚫 Canceled (No longer needed - project was cancel...)")
@@ -1835,7 +1980,7 @@ func TestFormatListResponse_GroupedSections(t *testing.T) {
 			},
 		}
 
-		result := formatListResponse(records, 1)
+		result := formatListResponse(records, 1, "all")
 
 		// Should show without reason text or parentheses
 		assert.Contains(t, result, "🚫 Canceled")
@@ -1877,7 +2022,7 @@ func TestFormatListResponse_GroupedSections(t *testing.T) {
 			})
 		}
 
-		result := formatListResponse(records, 30)
+		result := formatListResponse(records, 30, "all")
 
 		// Count record codes in output (each appears once)
 		recordCount := 0
@@ -1912,7 +2057,7 @@ func TestFormatListResponse_GroupedSections(t *testing.T) {
 			})
 		}
 
-		result := formatListResponse(records, 25)
+		result := formatListResponse(records, 25, "all")
 
 		// Should show "Showing 15 of 25"
 		assert.Contains(t, result, "Showing 15 of 25 total records")
@@ -1929,7 +2074,7 @@ func TestFormatListResponse_GroupedSections(t *testing.T) {
 			},
 		}
 
-		result := formatListResponse(records, 1)
+		result := formatListResponse(records, 1, "all")
 
 		// Should NOT show pagination footer
 		assert.NotContains(t, result, "Showing")
@@ -1957,7 +2102,7 @@ func TestFormatListResponse_GroupedSections(t *testing.T) {
 				},
 			}
 
-			result := formatListResponse(records, 1)
+			result := formatListResponse(records, 1, "all")
 
 			assert.Contains(t, result, fmt.Sprintf("🚫 Canceled (%s)", reason),
 				"Should display reason: %s", reason)
@@ -2017,7 +2162,7 @@ func TestFormatListResponse_UTF8Handling(t *testing.T) {
 				},
 			}
 
-			result := formatListResponse(records, 1)
+			result := formatListResponse(records, 1, "all")
 			assert.Contains(t, result, tc.expectedOutput,
 				"Should handle UTF-8 characters correctly")
 		})

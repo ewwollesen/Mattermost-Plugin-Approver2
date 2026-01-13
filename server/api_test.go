@@ -1026,7 +1026,7 @@ func TestHandleCancelModalSubmission(t *testing.T) {
 		payload := &model.SubmitDialogRequest{
 			CallbackId: "cancel_approval_record123",
 			UserId:     "user123",
-			Submission: map[string]interface{}{
+			Submission: map[string]any{
 				"reason_code": "no_longer_needed",
 			},
 		}
@@ -1046,7 +1046,7 @@ func TestHandleCancelModalSubmission(t *testing.T) {
 		payload := &model.SubmitDialogRequest{
 			CallbackId: "cancel_approval_record123",
 			UserId:     "user123",
-			Submission: map[string]interface{}{
+			Submission: map[string]any{
 				"reason_code":       "other",
 				"other_reason_text": "",
 			},
@@ -1064,7 +1064,7 @@ func TestHandleCancelModalSubmission(t *testing.T) {
 		payload := &model.SubmitDialogRequest{
 			CallbackId: "cancel_approval_record123",
 			UserId:     "user123",
-			Submission: map[string]interface{}{
+			Submission: map[string]any{
 				"reason_code":       "other",
 				"other_reason_text": "   ",
 			},
@@ -1101,7 +1101,7 @@ func TestHandleCancelModalSubmission(t *testing.T) {
 		payload := &model.SubmitDialogRequest{
 			CallbackId: "cancel_approval_record123",
 			UserId:     "different_user",
-			Submission: map[string]interface{}{
+			Submission: map[string]any{
 				"reason_code": "no_longer_needed",
 			},
 		}
@@ -1130,7 +1130,7 @@ func TestHandleCancelModalSubmission(t *testing.T) {
 		payload := &model.SubmitDialogRequest{
 			CallbackId: "cancel_approval_nonexistent",
 			UserId:     "user123",
-			Submission: map[string]interface{}{
+			Submission: map[string]any{
 				"reason_code": "no_longer_needed",
 			},
 		}
@@ -1153,7 +1153,7 @@ func TestHandleCancelModalSubmission(t *testing.T) {
 		payload := &model.SubmitDialogRequest{
 			CallbackId: "invalid_format",
 			UserId:     "user123",
-			Submission: map[string]interface{}{
+			Submission: map[string]any{
 				"reason_code": "no_longer_needed",
 			},
 		}
@@ -1170,7 +1170,7 @@ func TestHandleCancelModalSubmission(t *testing.T) {
 		payload := &model.SubmitDialogRequest{
 			CallbackId: "cancel_approval_record123",
 			UserId:     "user123",
-			Submission: map[string]interface{}{},
+			Submission: map[string]any{},
 		}
 
 		response := p.handleCancelModalSubmission(payload)
@@ -1191,11 +1191,11 @@ func TestDisableButtonsInDM(t *testing.T) {
 			Id:      "post123",
 			Message: "## 🕐 **Approval Request**\n\nOriginal message",
 			Props: model.StringInterface{
-				"attachments": []interface{}{
-					map[string]interface{}{
-						"actions": []interface{}{
-							map[string]interface{}{"name": "Approve"},
-							map[string]interface{}{"name": "Deny"},
+				"attachments": []any{
+					map[string]any{
+						"actions": []any{
+							map[string]any{"name": "Approve"},
+							map[string]any{"name": "Deny"},
 						},
 					},
 				},
@@ -1231,11 +1231,11 @@ func TestDisableButtonsInDM(t *testing.T) {
 			Id:      "post123",
 			Message: "## 🕐 **Approval Request**\n\nOriginal message",
 			Props: model.StringInterface{
-				"attachments": []interface{}{
-					map[string]interface{}{
-						"actions": []interface{}{
-							map[string]interface{}{"name": "Approve"},
-							map[string]interface{}{"name": "Deny"},
+				"attachments": []any{
+					map[string]any{
+						"actions": []any{
+							map[string]any{"name": "Approve"},
+							map[string]any{"name": "Deny"},
 						},
 					},
 				},

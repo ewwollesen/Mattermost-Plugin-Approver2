@@ -211,7 +211,7 @@ func (p *Plugin) openCancellationModal(triggerID string, approvalCode string, re
 					},
 					Default:  "no_longer_needed",
 					Optional: false,
-					HelpText: "Help us understand why requests are cancelled",
+					HelpText: "Help us understand why requests are canceled",
 				},
 				{
 					DisplayName: "Additional details (if Other)",

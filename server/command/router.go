@@ -380,6 +380,33 @@ func formatFailedNotifications(records []*approval.ApprovalRecord, stats Approva
 
 // executeList displays all approval records for the authenticated user
 func (r *Router) executeList(args *model.CommandArgs) (*model.CommandResponse, error) {
+	// Parse filter parameter from command (Story 5.1)
+	// Example: "/approve list pending" -> filter = "pending"
+	// Example: "/approve list" -> filter = "pending" (default, Story 5.2: changed to focus on actionable items)
+	parts := strings.Fields(args.Command)
+	filter := "pending" // Story 5.2: Changed default to focus on actionable items (was "all" in Story 5.1)
+
+	if len(parts) > 2 {
+		// Extract filter argument (parts[2] is the filter after "/approve list")
+		filter = strings.ToLower(strings.TrimSpace(parts[2]))
+
+		// Validate filter
+		validFilters := map[string]bool{
+			"pending":  true,
+			"approved": true,
+			"denied":   true,
+			"canceled": true,
+			"all":      true,
+		}
+
+		if !validFilters[filter] {
+			return &model.CommandResponse{
+				ResponseType: model.CommandResponseTypeEphemeral,
+				Text:         fmt.Sprintf("Invalid filter '%s'. Valid filters: pending, approved, denied, canceled, all", parts[2]),
+			}, nil
+		}
+	}
+
 	// Security: args.UserId is authenticated by Mattermost Plugin API
 	// The Mattermost server guarantees this ID matches the authenticated user session (NFR-S1)
 	// Access control: GetUserApprovals only returns records where this user is requester or approver (NFR-S2, FR37)
@@ -395,28 +422,118 @@ func (r *Router) executeList(args *model.CommandArgs) (*model.CommandResponse, e
 		}, nil
 	}
 
-	// Handle empty state
-	if len(records) == 0 {
+	// Apply status filter (Story 5.1)
+	filteredRecords := filterRecordsByStatus(records, filter)
+
+	// Handle empty state (Story 5.2: Filter-specific message)
+	if len(filteredRecords) == 0 {
+		emptyMessage := fmt.Sprintf("No %s approval requests. Use `/approve list all` to see all requests.", filter)
 		return &model.CommandResponse{
 			ResponseType: model.CommandResponseTypeEphemeral,
-			Text:         "No approval records found. Use `/approve new` to create a request.",
+			Text:         emptyMessage,
 		}, nil
 	}
 
+	// Apply chronological sorting for specific status filters (Story 5.1, Subtask 2.5)
+	// For "all" filter, groupAndSortRecords will handle sorting in formatListResponse
+	sortRecordsByTimestamp(filteredRecords, filter)
+
 	// Apply pagination (limit to 20 records)
-	total := len(records)
-	displayRecords := records
+	total := len(filteredRecords)
+	displayRecords := filteredRecords
 	if total > 20 {
-		displayRecords = records[:20]
+		displayRecords = filteredRecords[:20]
 	}
 
-	// Format and return response
-	responseText := formatListResponse(displayRecords, total)
+	// Format and return response (Story 5.2: Pass filter for dynamic header)
+	responseText := formatListResponse(displayRecords, total, filter)
 
 	return &model.CommandResponse{
 		ResponseType: model.CommandResponseTypeEphemeral,
 		Text:         responseText,
 	}, nil
+}
+
+// filterRecordsByStatus filters approval records by status type (Story 5.1)
+// Supported filters: "pending", "approved", "denied", "canceled", "all"
+// Returns filtered slice or original slice if filter is "all"
+func filterRecordsByStatus(records []*approval.ApprovalRecord, filter string) []*approval.ApprovalRecord {
+	// "all" filter returns all records unchanged
+	if filter == "all" {
+		return records
+	}
+
+	// Filter records by matching status
+	// Initialize as empty slice (not nil) for consistent behavior
+	filtered := make([]*approval.ApprovalRecord, 0)
+	for _, record := range records {
+		switch filter {
+		case "pending":
+			if record.Status == approval.StatusPending {
+				filtered = append(filtered, record)
+			}
+		case "approved":
+			if record.Status == approval.StatusApproved {
+				filtered = append(filtered, record)
+			}
+		case "denied":
+			if record.Status == approval.StatusDenied {
+				filtered = append(filtered, record)
+			}
+		case "canceled":
+			if record.Status == approval.StatusCanceled {
+				filtered = append(filtered, record)
+			}
+		}
+	}
+
+	return filtered
+}
+
+// sortRecordsByTimestamp sorts approval records chronologically by appropriate timestamp
+// for specific status filters (Story 5.1, Subtask 2.5).
+// For "all" filter, this is a no-op (groupAndSortRecords handles it in formatListResponse).
+// Sorts in-place, descending (newest first).
+func sortRecordsByTimestamp(records []*approval.ApprovalRecord, filter string) {
+	// No-op for "all" filter (groupAndSortRecords handles this)
+	if filter == "all" {
+		return
+	}
+
+	// Sort by appropriate timestamp based on filter
+	sort.Slice(records, func(i, j int) bool {
+		var iTime, jTime int64
+
+		switch filter {
+		case "pending":
+			// Pending records: sort by CreatedAt
+			iTime = records[i].CreatedAt
+			jTime = records[j].CreatedAt
+
+		case "approved", "denied":
+			// Decided records: sort by DecidedAt
+			iTime = records[i].DecidedAt
+			jTime = records[j].DecidedAt
+
+		case "canceled":
+			// Canceled records: sort by CanceledAt (fallback to CreatedAt if not set)
+			iTime = records[i].CanceledAt
+			if iTime == 0 {
+				iTime = records[i].CreatedAt
+			}
+			jTime = records[j].CanceledAt
+			if jTime == 0 {
+				jTime = records[j].CreatedAt
+			}
+
+		default:
+			// Unknown filter: no sorting
+			return false
+		}
+
+		// Sort descending (newest first)
+		return iTime > jTime
+	})
 }
 
 // groupAndSortRecords separates records into three groups (pending, decided, canceled)
@@ -461,10 +578,13 @@ func groupAndSortRecords(records []*approval.ApprovalRecord) (pending, decided, 
 }
 
 // formatListResponse formats approval records into a readable list with grouped sections
-func formatListResponse(records []*approval.ApprovalRecord, total int) string {
+// Story 5.2: Added filter parameter for dynamic header count
+func formatListResponse(records []*approval.ApprovalRecord, total int, filter string) string {
 	var output strings.Builder
 
-	output.WriteString("**Your Approval Records:**\n\n")
+	// Story 5.2: Dynamic header with count (AC2, AC3)
+	header := fmt.Sprintf("## Your Approval Requests (%d %s)\n\n", total, filter)
+	output.WriteString(header)
 
 	// Group and sort records
 	pending, decided, canceled := groupAndSortRecords(records)
@@ -648,11 +768,11 @@ func formatRecordDetail(record *approval.ApprovalRecord) string {
 		// Cancellation reason (handle empty for old records)
 		reason := record.CanceledReason
 		if reason == "" {
-			reason = "No reason recorded (cancelled before v0.2.0)"
+			reason = "No reason recorded (canceled before v0.2.0)"
 		}
 		output.WriteString(fmt.Sprintf("**Reason:** %s\n", reason))
 
-		// Who cancelled (only requester can cancel in v0.2.0)
+		// Who canceled (only requester can cancel in v0.2.0)
 		output.WriteString(fmt.Sprintf("**Canceled by:** @%s\n", record.RequesterUsername))
 
 		// Cancellation timestamp (handle zero value for old records)

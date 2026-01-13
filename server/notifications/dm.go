@@ -174,11 +174,11 @@ func SendOutcomeNotificationDM(api plugin.API, botUserID string, record *approva
 	return createdPost.Id, nil
 }
 
-// UpdateApprovalPostForCancellation updates the approver's DM post to show cancelled state.
+// UpdateApprovalPostForCancellation updates the approver's DM post to show canceled state.
 // This function:
 // - Updates the message to show cancellation with plain description text
 // - Removes interactive buttons (fixes ghost buttons bug)
-// - Shows who cancelled and when
+// - Shows who canceled and when
 //
 // Returns error if post update fails. Caller should log but continue with cancellation.
 func UpdateApprovalPostForCancellation(api plugin.API, record *approval.ApprovalRecord, canceledByUsername string) error {
@@ -229,7 +229,7 @@ func UpdateApprovalPostForCancellation(api plugin.API, record *approval.Approval
 	return nil
 }
 
-// SendCancellationNotificationDM sends a DM notification to the approver when a request is cancelled.
+// SendCancellationNotificationDM sends a DM notification to the approver when a request is canceled.
 // The message includes complete context: reference code, requester, cancellation reason, and timestamp.
 //
 // IMPORTANT: This function implements graceful degradation (Architecture Decision 2.2). The caller MUST NOT
