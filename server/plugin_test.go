@@ -161,6 +161,20 @@ func TestHandleCancelCommand(t *testing.T) {
 			return len(key) > 15 && key[:15] == "approval:index:"
 		}), mock.Anything).Return(nil)
 
+		// Mock GetUser for requester (needed for post update)
+		api.On("GetUser", "user123").Return(&model.User{
+			Id:       "user123",
+			Username: "testuser",
+		}, nil)
+
+		// Mock GetPost and UpdatePost for approver notification update (Story 4.1)
+		api.On("GetPost", mock.Anything).Return(&model.Post{
+			Id:      "notification_post_123",
+			Message: "Original message",
+			Props:   model.StringInterface{},
+		}, nil).Maybe()
+		api.On("UpdatePost", mock.Anything).Return(&model.Post{}, nil).Maybe()
+
 		// Mock ephemeral post
 		api.On("SendEphemeralPost", "user123", mock.MatchedBy(func(post *model.Post) bool {
 			return post.ChannelId == "channel123" &&
@@ -169,6 +183,7 @@ func TestHandleCancelCommand(t *testing.T) {
 
 		// Mock logging
 		api.On("LogInfo", mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return()
+		api.On("LogWarn", mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything).Maybe()
 
 		p := &Plugin{}
 		p.SetAPI(api)
@@ -209,6 +224,12 @@ func TestHandleCancelCommand(t *testing.T) {
 			"schemaVersion": 1
 		}`
 		api.On("KVGet", "approval:record:record123").Return([]byte(recordJSON), nil)
+
+		// Mock GetUser for requester (called before permission check)
+		api.On("GetUser", "user456").Return(&model.User{
+			Id:       "user456",
+			Username: "otheruser",
+		}, nil)
 
 		// Mock error logging
 		api.On("LogError", mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return()
@@ -256,6 +277,12 @@ func TestHandleCancelCommand(t *testing.T) {
 		}`
 		api.On("KVGet", "approval:record:record123").Return([]byte(recordJSON), nil)
 
+		// Mock GetUser for requester (called before validation)
+		api.On("GetUser", "user123").Return(&model.User{
+			Id:       "user123",
+			Username: "testuser",
+		}, nil)
+
 		// Mock logging
 		api.On("LogError", mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return()
 		api.On("LogInfo", mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return()
@@ -290,6 +317,12 @@ func TestHandleCancelCommand(t *testing.T) {
 
 		// Mock KV store operations - code not found
 		api.On("KVGet", "approval:code:Z-NOTFND").Return(nil, nil)
+
+		// Mock GetUser for requester (called before code lookup)
+		api.On("GetUser", "user123").Return(&model.User{
+			Id:       "user123",
+			Username: "testuser",
+		}, nil)
 
 		// Mock logging
 		api.On("LogError", mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return()
@@ -345,6 +378,20 @@ func TestHandleCancelCommand(t *testing.T) {
 			return len(key) > 15 && key[:15] == "approval:index:"
 		}), mock.Anything).Return(nil)
 
+		// Mock GetUser for requester (needed for post update)
+		api.On("GetUser", "user123").Return(&model.User{
+			Id:       "user123",
+			Username: "testuser",
+		}, nil)
+
+		// Mock GetPost and UpdatePost for approver notification update (Story 4.1)
+		api.On("GetPost", mock.Anything).Return(&model.Post{
+			Id:      "notification_post_123",
+			Message: "Original message",
+			Props:   model.StringInterface{},
+		}, nil).Maybe()
+		api.On("UpdatePost", mock.Anything).Return(&model.Post{}, nil).Maybe()
+
 		// Mock ephemeral post failure (returns nil)
 		api.On("SendEphemeralPost", "user123", mock.Anything).Return(nil)
 
@@ -358,6 +405,7 @@ func TestHandleCancelCommand(t *testing.T) {
 		// Mock logging
 		api.On("LogError", mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return()
 		api.On("LogInfo", mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return()
+		api.On("LogWarn", mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything).Maybe()
 
 		p := &Plugin{}
 		p.SetAPI(api)
@@ -402,6 +450,12 @@ func TestHandleCancelCommand(t *testing.T) {
 		// Mock plugin activation
 		api.On("EnsureBotUser", mock.AnythingOfType("*model.Bot")).Return("bot123", nil)
 		api.On("RegisterCommand", mock.AnythingOfType("*model.Command")).Return(nil)
+
+		// Mock GetUser for requester (called before validation)
+		api.On("GetUser", "user123").Return(&model.User{
+			Id:       "user123",
+			Username: "testuser",
+		}, nil)
 
 		// Mock logging
 		api.On("LogError", mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return()

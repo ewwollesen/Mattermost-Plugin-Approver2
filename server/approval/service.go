@@ -35,12 +35,17 @@ func NewService(store ApprovalStore, api plugin.API, botUserID string) *Service 
 	}
 }
 
-// CancelApproval cancels a pending approval request
+// CancelApproval cancels a pending approval request with a reason
+// Parameters:
+// - approvalCode: The human-friendly approval code (e.g., "A-X7K9Q2")
+// - requesterID: The user ID of the requester
+// - reason: The reason for cancellation (required)
 // Returns:
 // - ErrRecordNotFound if approval doesn't exist
 // - ErrRecordImmutable if approval is not pending
 // - error with "permission denied" if requester doesn't match
-func (s *Service) CancelApproval(approvalCode, requesterID string) error {
+// - error if reason is empty
+func (s *Service) CancelApproval(approvalCode, requesterID, reason string) error {
 	// Validation: code and requester ID required (trim whitespace)
 	approvalCode = strings.TrimSpace(approvalCode)
 	if approvalCode == "" {
@@ -55,6 +60,12 @@ func (s *Service) CancelApproval(approvalCode, requesterID string) error {
 	requesterID = strings.TrimSpace(requesterID)
 	if requesterID == "" {
 		return fmt.Errorf("requester ID is required")
+	}
+
+	// Validate reason is provided (v0.2.0+)
+	reason = strings.TrimSpace(reason)
+	if reason == "" {
+		return fmt.Errorf("cancellation reason is required")
 	}
 
 	// Retrieve approval record by code
@@ -74,9 +85,12 @@ func (s *Service) CancelApproval(approvalCode, requesterID string) error {
 		return fmt.Errorf("cannot cancel approval with status %s: %w", record.Status, ErrRecordImmutable)
 	}
 
-	// Update record status and timestamp
+	// Update record status, reason, and timestamps
+	now := model.GetMillis()
 	record.Status = StatusCanceled
-	record.DecidedAt = model.GetMillis()
+	record.CanceledReason = reason
+	record.CanceledAt = now
+	record.DecidedAt = now // Keep for backwards compatibility
 
 	// Persist updated record
 	if err := s.store.SaveApproval(record); err != nil {

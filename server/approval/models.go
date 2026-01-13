@@ -31,6 +31,10 @@ type ApprovalRecord struct {
 	CreatedAt int64 `json:"createdAt"`
 	DecidedAt int64 `json:"decidedAt"` // 0 if pending
 
+	// Cancellation fields (v0.2.0+)
+	CanceledReason string `json:"canceledReason,omitempty"` // Reason for cancellation
+	CanceledAt     int64  `json:"canceledAt,omitempty"`     // Timestamp when canceled
+
 	// Context
 	RequestChannelID string `json:"requestChannelId"`
 	TeamID           string `json:"teamId,omitempty"`

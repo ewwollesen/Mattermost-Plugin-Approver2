@@ -3,6 +3,7 @@ package command
 import (
 	"errors"
 	"fmt"
+	"slices"
 	"strings"
 	"time"
 
@@ -185,15 +186,7 @@ func (r *Router) executeStatus(args *model.CommandArgs, subargs []string) (*mode
 	// Security: Split roles by space and check for exact "system_admin" match
 	// to prevent bypass attacks like "fake_system_admin" or "not_system_admin"
 	roles := strings.Fields(user.Roles)
-	hasSystemAdmin := false
-	for _, role := range roles {
-		if role == "system_admin" {
-			hasSystemAdmin = true
-			break
-		}
-	}
-
-	if !hasSystemAdmin {
+	if !slices.Contains(roles, "system_admin") {
 		return &model.CommandResponse{
 			ResponseType: model.CommandResponseTypeEphemeral,
 			Text:         "❌ Permission denied. Only system administrators can view approval statistics.",
@@ -211,13 +204,7 @@ func (r *Router) executeStatus(args *model.CommandArgs, subargs []string) (*mode
 	}
 
 	// Check if --failed-notifications flag is present
-	showFailedOnly := false
-	for _, arg := range subargs {
-		if arg == "--failed-notifications" {
-			showFailedOnly = true
-			break
-		}
-	}
+	showFailedOnly := slices.Contains(subargs, "--failed-notifications")
 
 	// Calculate statistics
 	stats := calculateStatistics(records)

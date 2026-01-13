@@ -595,7 +595,7 @@ func TestKVStore_GetUserApprovals(t *testing.T) {
 
 		// Mock KVList - requester index returns empty, approver index returns record
 		indexKey := "approval:index:approver:user2:9999999997999:record1"
-		api.On("KVList", 0, MaxApprovalRecordsLimit).Return([]string{}, nil).Once()       // requester index (empty)
+		api.On("KVList", 0, MaxApprovalRecordsLimit).Return([]string{}, nil).Once()         // requester index (empty)
 		api.On("KVList", 0, MaxApprovalRecordsLimit).Return([]string{indexKey}, nil).Once() // approver index
 
 		// Mock KVGet for index key

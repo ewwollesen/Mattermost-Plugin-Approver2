@@ -69,3 +69,14 @@ development_status:
   3-4-implement-index-strategy-for-fast-retrieval: done  # Completed during Story 3.1 code review
   3-5-enforce-access-control-on-retrieval: done
   epic-3-retrospective: optional
+
+  # Epic 4: Improved Cancellation UX + Audit Trail
+  epic-4: in-progress
+  4-1-update-approver-dm-post-on-cancellation: done
+  4-2-send-cancellation-notification-to-approver: review
+  4-3-add-cancellation-reason-dropdown: backlog
+  4-4-store-cancellation-reason-in-approval-record: done
+  4-5-display-cancellation-reason-in-approval-details: backlog
+  4-6-show-canceled-requests-in-list-sorted-to-bottom: backlog
+  4-7-fix-ghost-buttons-bug: backlog
+  epic-4-retrospective: optional

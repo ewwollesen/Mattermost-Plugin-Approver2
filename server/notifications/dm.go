@@ -174,6 +174,129 @@ func SendOutcomeNotificationDM(api plugin.API, botUserID string, record *approva
 	return createdPost.Id, nil
 }
 
+// UpdateApprovalPostForCancellation updates the approver's DM post to show cancelled state.
+// This function:
+// - Updates the message to show cancellation with plain description text
+// - Removes interactive buttons (fixes ghost buttons bug)
+// - Shows who cancelled and when
+//
+// Returns error if post update fails. Caller should log but continue with cancellation.
+func UpdateApprovalPostForCancellation(api plugin.API, record *approval.ApprovalRecord, canceledByUsername string) error {
+	// Validate inputs
+	if record == nil {
+		return fmt.Errorf("approval record is nil")
+	}
+	if record.NotificationPostID == "" {
+		api.LogWarn("Cannot update approver post: no post ID stored", "request_id", record.ID)
+		return fmt.Errorf("no approver post ID found")
+	}
+
+	// Get the original post
+	post, appErr := api.GetPost(record.NotificationPostID)
+	if appErr != nil {
+		api.LogError("Failed to get post for update", "post_id", record.NotificationPostID, "error", appErr.Error())
+		return fmt.Errorf("failed to get post: %w", appErr)
+	}
+
+	// Build updated message with cancellation info
+	canceledAt := time.UnixMilli(record.CanceledAt).UTC()
+	canceledAtStr := canceledAt.Format("Jan 02, 2006 3:04 PM")
+
+	updatedMessage := fmt.Sprintf("🚫 **Approval Request (Canceled)**\n\n"+
+		"**From:** @%s\n"+
+		"**Request ID:** `%s`\n"+
+		"**Description:**\n%s\n\n"+
+		"---\n"+
+		"_Canceled by @%s at %s_",
+		record.RequesterUsername,
+		record.Code,
+		record.Description,
+		canceledByUsername,
+		canceledAtStr,
+	)
+
+	// Remove action buttons (props) - this fixes the ghost buttons bug
+	post.Message = updatedMessage
+	post.Props = model.StringInterface{} // Clear all interactive elements
+
+	// Update the post
+	_, appErr = api.UpdatePost(post)
+	if appErr != nil {
+		api.LogError("Failed to update post", "post_id", record.NotificationPostID, "error", appErr.Error())
+		return fmt.Errorf("failed to update post: %w", appErr)
+	}
+
+	return nil
+}
+
+// SendCancellationNotificationDM sends a DM notification to the approver when a request is cancelled.
+// The message includes complete context: reference code, requester, cancellation reason, and timestamp.
+//
+// IMPORTANT: This function implements graceful degradation (Architecture Decision 2.2). The caller MUST NOT
+// fail the cancellation operation if this notification fails. Cancellation integrity is non-negotiable.
+//
+// Returns the post ID on success, or error if DM send fails (e.g., DM channel creation failure, CreatePost failure).
+// The caller should log errors at WARN level and continue - notification failures are best-effort only.
+func SendCancellationNotificationDM(api plugin.API, botUserID string, record *approval.ApprovalRecord, canceledByUsername string) (string, error) {
+	// Validate inputs
+	if botUserID == "" {
+		return "", fmt.Errorf("bot user ID not available")
+	}
+	if record == nil {
+		return "", fmt.Errorf("approval record is nil")
+	}
+	if record.ID == "" {
+		return "", fmt.Errorf("approval record ID is empty")
+	}
+	if record.ApproverID == "" {
+		return "", fmt.Errorf("approver ID is empty")
+	}
+
+	// Get or create DM channel between bot and approver
+	channelID, err := GetDMChannelID(api, botUserID, record.ApproverID)
+	if err != nil {
+		return "", fmt.Errorf("failed to get DM channel for approver %s: %w", record.ApproverID, err)
+	}
+
+	// Format cancellation timestamp as "Jan 02, 2006 3:04 PM"
+	canceledAt := time.UnixMilli(record.CanceledAt).UTC()
+	canceledAtStr := canceledAt.Format("Jan 02, 2006 3:04 PM")
+
+	// Handle cancellation reason (may be empty)
+	canceledReason := record.CanceledReason
+	if canceledReason == "" {
+		canceledReason = "Not specified"
+	}
+
+	// Construct DM message
+	message := fmt.Sprintf("🚫 **Approval Request Canceled**\n\n"+
+		"**Reference:** `%s`\n"+
+		"**Requester:** @%s\n"+
+		"**Reason:** %s\n"+
+		"**Canceled:** %s\n\n"+
+		"The approval request you received has been canceled by the requester.",
+		record.Code,
+		record.RequesterUsername,
+		canceledReason,
+		canceledAtStr,
+	)
+
+	// Create post (no interactive buttons for cancellation notification)
+	post := &model.Post{
+		UserId:    botUserID,
+		ChannelId: channelID,
+		Message:   message,
+	}
+
+	// Send DM via CreatePost (persistent message, not ephemeral)
+	createdPost, appErr := api.CreatePost(post)
+	if appErr != nil {
+		return "", fmt.Errorf("failed to send cancellation notification to approver %s: %w", record.ApproverID, appErr)
+	}
+
+	return createdPost.Id, nil
+}
+
 // GetDMChannelID gets or creates a DM channel between the bot and the target user.
 // Returns the channel ID if successful, or an error if the channel cannot be created.
 func GetDMChannelID(api plugin.API, botUserID, targetUserID string) (string, error) {

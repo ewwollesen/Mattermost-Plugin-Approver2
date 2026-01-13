@@ -42,6 +42,7 @@ func TestCancelApproval(t *testing.T) {
 		name           string
 		approvalCode   string
 		requesterID    string
+		reason         string
 		existingRecord *ApprovalRecord
 		getByCodeErr   error
 		saveErr        error
@@ -54,6 +55,7 @@ func TestCancelApproval(t *testing.T) {
 			name:         "successful cancellation by requester",
 			approvalCode: "A-X7K9Q2",
 			requesterID:  "user123",
+			reason:       "No longer needed",
 			existingRecord: &ApprovalRecord{
 				ID:          "abc123",
 				Code:        "A-X7K9Q2",
@@ -72,6 +74,7 @@ func TestCancelApproval(t *testing.T) {
 			name:         "permission denied - different user",
 			approvalCode: "A-X7K9Q2",
 			requesterID:  "user456", // Different from record's requester
+			reason:       "No longer needed",
 			existingRecord: &ApprovalRecord{
 				ID:          "abc123",
 				Code:        "A-X7K9Q2",
@@ -87,6 +90,7 @@ func TestCancelApproval(t *testing.T) {
 			name:         "cannot cancel approved approval",
 			approvalCode: "A-X7K9Q2",
 			requesterID:  "user123",
+			reason:       "No longer needed",
 			existingRecord: &ApprovalRecord{
 				ID:          "abc123",
 				Code:        "A-X7K9Q2",
@@ -103,6 +107,7 @@ func TestCancelApproval(t *testing.T) {
 			name:         "cannot cancel denied approval",
 			approvalCode: "A-X7K9Q2",
 			requesterID:  "user123",
+			reason:       "No longer needed",
 			existingRecord: &ApprovalRecord{
 				ID:          "abc123",
 				Code:        "A-X7K9Q2",
@@ -119,6 +124,7 @@ func TestCancelApproval(t *testing.T) {
 			name:         "cannot cancel already canceled approval",
 			approvalCode: "A-X7K9Q2",
 			requesterID:  "user123",
+			reason:       "No longer needed",
 			existingRecord: &ApprovalRecord{
 				ID:          "abc123",
 				Code:        "A-X7K9Q2",
@@ -135,6 +141,7 @@ func TestCancelApproval(t *testing.T) {
 			name:           "record not found",
 			approvalCode:   "Z-NOTFND",
 			requesterID:    "user123",
+			reason:         "No longer needed",
 			existingRecord: nil,
 			getByCodeErr:   ErrRecordNotFound,
 			wantErr:        true,
@@ -144,6 +151,7 @@ func TestCancelApproval(t *testing.T) {
 			name:         "empty approval code",
 			approvalCode: "",
 			requesterID:  "user123",
+			reason:       "No longer needed",
 			wantErr:      true,
 			errContains:  "approval code is required",
 		},
@@ -151,13 +159,23 @@ func TestCancelApproval(t *testing.T) {
 			name:         "empty requester ID",
 			approvalCode: "A-X7K9Q2",
 			requesterID:  "",
+			reason:       "No longer needed",
 			wantErr:      true,
 			errContains:  "requester ID is required",
+		},
+		{
+			name:         "empty reason",
+			approvalCode: "A-X7K9Q2",
+			requesterID:  "user123",
+			reason:       "",
+			wantErr:      true,
+			errContains:  "cancellation reason is required",
 		},
 		{
 			name:         "save fails after validation passes",
 			approvalCode: "A-X7K9Q2",
 			requesterID:  "user123",
+			reason:       "No longer needed",
 			existingRecord: &ApprovalRecord{
 				ID:          "abc123",
 				Code:        "A-X7K9Q2",
@@ -183,7 +201,9 @@ func TestCancelApproval(t *testing.T) {
 				strings.TrimSpace(tt.approvalCode) != "" &&
 				approvalCodePattern.MatchString(strings.TrimSpace(tt.approvalCode)) &&
 				tt.requesterID != "" &&
-				strings.TrimSpace(tt.requesterID) != ""
+				strings.TrimSpace(tt.requesterID) != "" &&
+				tt.reason != "" &&
+				strings.TrimSpace(tt.reason) != ""
 
 			if codePassesValidation {
 				if tt.existingRecord != nil {
@@ -198,7 +218,9 @@ func TestCancelApproval(t *testing.T) {
 							// Verify the record was updated correctly
 							return r.ID == tt.existingRecord.ID &&
 								r.Status == StatusCanceled &&
-								r.DecidedAt > 0
+								r.DecidedAt > 0 &&
+								r.CanceledAt > 0 &&
+								r.CanceledReason == tt.reason
 						})).Return(tt.saveErr)
 					}
 				} else {
@@ -210,7 +232,7 @@ func TestCancelApproval(t *testing.T) {
 			service := NewService(mockStore, mockAPI, "bot-user-id")
 
 			// Execute
-			err := service.CancelApproval(tt.approvalCode, tt.requesterID)
+			err := service.CancelApproval(tt.approvalCode, tt.requesterID, tt.reason)
 
 			// Verify error expectations
 			if tt.wantErr {
@@ -244,16 +266,20 @@ func TestCancelApproval_TimestampSet(t *testing.T) {
 
 	mockStore.On("GetByCode", "A-X7K9Q2").Return(record, nil)
 	mockStore.On("SaveApproval", mock.MatchedBy(func(r *ApprovalRecord) bool {
-		// Verify timestamp is set and reasonable (within last 10 seconds)
-		return r.DecidedAt > 0 && r.DecidedAt >= 1704931200000
+		// Verify timestamps are set and reasonable (within last 10 seconds)
+		return r.DecidedAt > 0 && r.DecidedAt >= 1704931200000 &&
+			r.CanceledAt > 0 && r.CanceledAt >= 1704931200000 &&
+			r.CanceledReason == "No longer needed"
 	})).Return(nil)
 
 	service := NewService(mockStore, mockAPI, "bot-user-id")
-	err := service.CancelApproval("A-X7K9Q2", "user123")
+	err := service.CancelApproval("A-X7K9Q2", "user123", "No longer needed")
 
 	assert.NoError(t, err)
 	assert.Equal(t, StatusCanceled, record.Status)
 	assert.Greater(t, record.DecidedAt, int64(0), "DecidedAt should be set")
+	assert.Greater(t, record.CanceledAt, int64(0), "CanceledAt should be set")
+	assert.Equal(t, "No longer needed", record.CanceledReason)
 	mockStore.AssertExpectations(t)
 }
 
@@ -263,30 +289,42 @@ func TestCancelApproval_WhitespaceValidation(t *testing.T) {
 		name        string
 		code        string
 		requesterID string
+		reason      string
 		errContains string
 	}{
 		{
 			name:        "whitespace-only approval code",
 			code:        "   ",
 			requesterID: "user123",
+			reason:      "No longer needed",
 			errContains: "approval code is required",
 		},
 		{
 			name:        "tab-only approval code",
 			code:        "\t",
 			requesterID: "user123",
+			reason:      "No longer needed",
 			errContains: "approval code is required",
 		},
 		{
 			name:        "whitespace-only requester ID",
 			code:        "A-X7K9Q2",
 			requesterID: "  ",
+			reason:      "No longer needed",
 			errContains: "requester ID is required",
+		},
+		{
+			name:        "whitespace-only reason",
+			code:        "A-X7K9Q2",
+			requesterID: "user123",
+			reason:      "   ",
+			errContains: "cancellation reason is required",
 		},
 		{
 			name:        "code with leading/trailing whitespace is trimmed",
 			code:        "  A-X7K9Q2  ",
 			requesterID: "user123",
+			reason:      "No longer needed",
 			errContains: "", // Should succeed - whitespace trimmed
 		},
 	}
@@ -311,7 +349,7 @@ func TestCancelApproval_WhitespaceValidation(t *testing.T) {
 			}
 
 			service := NewService(mockStore, mockAPI, "bot-user-id")
-			err := service.CancelApproval(tt.code, tt.requesterID)
+			err := service.CancelApproval(tt.code, tt.requesterID, tt.reason)
 
 			if tt.errContains != "" {
 				assert.Error(t, err)
@@ -347,7 +385,7 @@ func TestCancelApproval_InvalidFormat(t *testing.T) {
 			mockAPI := &plugintest.API{}
 
 			service := NewService(mockStore, mockAPI, "bot-user-id")
-			err := service.CancelApproval(tt.code, "user123")
+			err := service.CancelApproval(tt.code, "user123", "No longer needed")
 
 			assert.Error(t, err)
 			if tt.code == "" {
@@ -370,7 +408,7 @@ func TestCancelApproval_CorruptedIndex(t *testing.T) {
 	mockStore.On("GetByCode", "A-X7K9Q2").Return(nil, fmt.Errorf("approval record deleted-id-123: %w", ErrRecordNotFound))
 
 	service := NewService(mockStore, mockAPI, "bot-user-id")
-	err := service.CancelApproval("A-X7K9Q2", "user123")
+	err := service.CancelApproval("A-X7K9Q2", "user123", "No longer needed")
 
 	assert.Error(t, err)
 	assert.Contains(t, err.Error(), "failed to retrieve approval")

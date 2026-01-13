@@ -419,13 +419,13 @@ func TestExecuteStatus(t *testing.T) {
 		records := []*approval.ApprovalRecord{
 			// Pending with notification failed
 			{
-				ID:                 "id1",
-				Code:               "A-FAIL1",
-				Status:             approval.StatusPending,
-				NotificationSent:   false,
-				RequesterUsername:  "alice",
-				ApproverUsername:   "bob",
-				CreatedAt:          1641024000000, // 2022-01-01 12:00:00
+				ID:                "id1",
+				Code:              "A-FAIL1",
+				Status:            approval.StatusPending,
+				NotificationSent:  false,
+				RequesterUsername: "alice",
+				ApproverUsername:  "bob",
+				CreatedAt:         1641024000000, // 2022-01-01 12:00:00
 			},
 			// Approved with outcome notification failed
 			{
@@ -669,7 +669,7 @@ func TestExecuteList(t *testing.T) {
 
 		// Create 25 records
 		records := make([]*approval.ApprovalRecord, 25)
-		for i := 0; i < 25; i++ {
+		for i := range 25 {
 			records[i] = &approval.ApprovalRecord{
 				ID:                fmt.Sprintf("record%d", i),
 				Code:              fmt.Sprintf("A-REC%02d", i),

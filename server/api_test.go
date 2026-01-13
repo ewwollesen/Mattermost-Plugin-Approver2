@@ -719,6 +719,20 @@ func TestHandleCancelCommand_Integration(t *testing.T) {
 			return len(key) > 15 && key[:15] == "approval:index:"
 		}), mock.Anything).Return(nil)
 
+		// Mock GetUser for requester (needed for post update)
+		api.On("GetUser", "alice123").Return(&model.User{
+			Id:       "alice123",
+			Username: "alice",
+		}, nil)
+
+		// Mock GetPost and UpdatePost for approver notification update (Story 4.1)
+		api.On("GetPost", mock.Anything).Return(&model.Post{
+			Id:      "notification_post_123",
+			Message: "Original message",
+			Props:   model.StringInterface{},
+		}, nil).Maybe()
+		api.On("UpdatePost", mock.Anything).Return(&model.Post{}, nil).Maybe()
+
 		// Mock ephemeral confirmation post
 		var capturedMessage string
 		api.On("SendEphemeralPost", "alice123", mock.Anything).Run(func(args mock.Arguments) {
@@ -729,6 +743,7 @@ func TestHandleCancelCommand_Integration(t *testing.T) {
 		// Mock logging
 		api.On("LogInfo", mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything).Maybe()
 		api.On("LogError", mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything).Maybe()
+		api.On("LogWarn", mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything).Maybe()
 
 		p := &Plugin{}
 		p.SetAPI(api)
@@ -796,6 +811,12 @@ func TestHandleCancelCommand_Integration(t *testing.T) {
 		canceledJSON, _ := json.Marshal(canceledRecord)
 		api.On("KVGet", "approval:record:record456").Return(canceledJSON, nil)
 
+		// Mock GetUser for requester (called before validation)
+		api.On("GetUser", "bob123").Return(&model.User{
+			Id:       "bob123",
+			Username: "bob",
+		}, nil)
+
 		// Mock logging
 		api.On("LogInfo", mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything).Maybe()
 		api.On("LogError", mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything).Maybe()
@@ -845,6 +866,12 @@ func TestHandleCancelCommand_Integration(t *testing.T) {
 		api.On("KVGet", "approval:code:A-NOAUTH").Return([]byte(`"record789"`), nil)
 		recordJSON, _ := json.Marshal(record)
 		api.On("KVGet", "approval:record:record789").Return(recordJSON, nil)
+
+		// Mock GetUser for requester (called before permission check)
+		api.On("GetUser", "charlie456").Return(&model.User{
+			Id:       "charlie456",
+			Username: "charlie",
+		}, nil)
 
 		// Mock logging
 		api.On("LogInfo", mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything).Maybe()
@@ -905,10 +932,26 @@ func TestHandleCancelCommand_Performance(t *testing.T) {
 		api.On("KVSet", mock.MatchedBy(func(key string) bool {
 			return len(key) > 15 && key[:15] == "approval:index:"
 		}), mock.Anything).Return(nil)
+
+		// Mock GetUser for requester
+		api.On("GetUser", "perfuser").Return(&model.User{
+			Id:       "perfuser",
+			Username: "perfuser",
+		}, nil)
+
+		// Mock GetPost and UpdatePost for approver notification update
+		api.On("GetPost", mock.Anything).Return(&model.Post{
+			Id:      "notification_post_123",
+			Message: "Original message",
+			Props:   model.StringInterface{},
+		}, nil).Maybe()
+		api.On("UpdatePost", mock.Anything).Return(&model.Post{}, nil).Maybe()
+
 		api.On("SendEphemeralPost", "perfuser", mock.Anything).Return(&model.Post{})
 
 		// Mock logging
 		api.On("LogInfo", mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything).Maybe()
+		api.On("LogWarn", mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything).Maybe()
 
 		p := &Plugin{}
 		p.SetAPI(api)
@@ -940,4 +983,9 @@ func TestHandleCancelCommand_Performance(t *testing.T) {
 
 		api.AssertExpectations(t)
 	})
+
+	// Note: Integration test for Story 4.2 (cancellation notification) is covered by 10 comprehensive unit tests
+	// in server/notifications/dm_test.go: TestSendCancellationNotificationDM
+	// These tests verify all aspects including: successful notification, error handling, message format,
+	// timestamp formatting, cancellation reason handling, and input validation.
 }

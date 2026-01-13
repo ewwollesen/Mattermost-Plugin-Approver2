@@ -298,12 +298,12 @@ func (s *KVStore) GetUserApprovals(userID string) ([]*approval.ApprovalRecord, e
 		}
 
 		// Get the record ID from the index
-		recordIDData, appErr := s.api.KVGet(key)
-		if appErr != nil {
+		recordIDData, getErr := s.api.KVGet(key)
+		if getErr != nil {
 			s.api.LogWarn("Failed to get record ID from requester index",
 				"key", key,
 				"user_id", userID,
-				"error", appErr.Error(),
+				"error", getErr.Error(),
 			)
 			continue
 		}

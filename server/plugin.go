@@ -7,6 +7,7 @@ import (
 
 	"github.com/mattermost/mattermost-plugin-approver2/server/approval"
 	"github.com/mattermost/mattermost-plugin-approver2/server/command"
+	"github.com/mattermost/mattermost-plugin-approver2/server/notifications"
 	"github.com/mattermost/mattermost-plugin-approver2/server/store"
 	"github.com/mattermost/mattermost/server/public/model"
 	"github.com/mattermost/mattermost/server/public/plugin"
@@ -134,8 +135,25 @@ func (p *Plugin) handleCancelCommand(args *model.CommandArgs, split []string) *m
 	approvalCode := split[2]
 	requesterID := args.UserId
 
+	// TODO (Story 4.3): Replace with modal to collect cancellation reason
+	// For now, use default reason until modal is implemented
+	reason := "No longer needed"
+
+	// Get the requester user for post update
+	requester, appErr := p.API.GetUser(requesterID)
+	if appErr != nil {
+		p.API.LogError("Failed to get requester user",
+			"error", appErr.Error(),
+			"user_id", requesterID,
+		)
+		return &model.CommandResponse{
+			ResponseType: model.CommandResponseTypeEphemeral,
+			Text:         "Failed to retrieve user information. Please try again.",
+		}
+	}
+
 	// Call service to cancel approval
-	err := p.service.CancelApproval(approvalCode, requesterID)
+	err := p.service.CancelApproval(approvalCode, requesterID, reason)
 	if err != nil {
 		// Log error with context
 		p.API.LogError("Failed to cancel approval",
@@ -150,6 +168,39 @@ func (p *Plugin) handleCancelCommand(args *model.CommandArgs, split []string) *m
 		return &model.CommandResponse{
 			ResponseType: model.CommandResponseTypeEphemeral,
 			Text:         errorMsg,
+		}
+	}
+
+	// Update the approver's DM post to show cancellation (Story 4.1)
+	// Get the updated record with cancellation data
+	updatedRecord, err := p.store.GetByCode(approvalCode)
+	if err != nil {
+		p.API.LogWarn("Failed to retrieve updated record for post update",
+			"error", err.Error(),
+			"approval_code", approvalCode,
+		)
+		// Continue - don't fail the cancellation if post update fails
+	} else {
+		// Update the original post (Story 4.1)
+		err = notifications.UpdateApprovalPostForCancellation(p.API, updatedRecord, requester.Username)
+		if err != nil {
+			p.API.LogWarn("Failed to update approver post",
+				"error", err.Error(),
+				"approval_code", approvalCode,
+				"approver_post_id", updatedRecord.NotificationPostID,
+			)
+			// Continue - post update is best-effort
+		}
+
+		// Send cancellation notification DM (Story 4.2)
+		_, err = notifications.SendCancellationNotificationDM(p.API, p.botUserID, updatedRecord, requester.Username)
+		if err != nil {
+			p.API.LogWarn("Failed to send cancellation notification, cancellation still successful",
+				"error", err.Error(),
+				"approval_id", updatedRecord.ID,
+				"approver_id", updatedRecord.ApproverID,
+			)
+			// Continue - notification is best-effort
 		}
 	}
 
