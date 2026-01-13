@@ -69,7 +69,7 @@ func (p *Plugin) registerCommand() error {
 		Trigger:          "approve",
 		AutoComplete:     true,
 		AutoCompleteDesc: "Manage approval requests",
-		AutoCompleteHint: "[new|list|get|cancel|status|help]",
+		AutoCompleteHint: "[new|list [pending|approved|denied|canceled|all]|get|cancel|status|help]",
 		DisplayName:      "Approval Request",
 		Description:      "Create, manage, and view approval requests",
 	}

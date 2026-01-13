@@ -76,7 +76,13 @@ func executeHelp() *model.CommandResponse {
 **Available Commands:**
 
 * **/approve new** - Create a new approval request
-* **/approve list** - View your approval requests and decisions
+* **/approve list [filter]** - View your approval requests and decisions
+  * No filter: shows pending requests (default)
+  * **pending** - pending approval requests
+  * **approved** - approved requests
+  * **denied** - denied requests
+  * **canceled** - canceled requests
+  * **all** - all requests (pending, approved, denied, canceled)
 * **/approve get [ID]** - View a specific approval by ID
 * **/approve cancel <APPROVAL_ID>** - Cancel a pending approval request
 * **/approve status** - View approval system statistics (admin only)
@@ -87,8 +93,11 @@ func executeHelp() *model.CommandResponse {
 * **/approve status** - View overall approval statistics and notification health
 * **/approve status --failed-notifications** - List specific approvals with failed notifications
 
-**Example:**
+**Examples:**
 ` + "`/approve new`" + ` - Opens a modal to create an approval request
+` + "`/approve list`" + ` - Shows pending approval requests
+` + "`/approve list approved`" + ` - Shows approved requests
+` + "`/approve list all`" + ` - Shows all requests
 
 For more information, visit the plugin documentation.`
 
