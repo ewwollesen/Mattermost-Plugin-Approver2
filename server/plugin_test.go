@@ -376,6 +376,223 @@ func TestHandleCancelCommand(t *testing.T) {
 	})
 }
 
+func TestHandleVerifyCommand(t *testing.T) {
+	t.Run("missing approval code shows usage", func(t *testing.T) {
+		api := &plugintest.API{}
+		p := &Plugin{}
+		p.SetAPI(api)
+
+		args := &model.CommandArgs{
+			Command:   "/approve verify",
+			UserId:    "user123",
+			ChannelId: "channel123",
+		}
+
+		resp, appErr := p.ExecuteCommand(nil, args)
+		assert.Nil(t, appErr)
+		assert.NotNil(t, resp)
+		assert.Equal(t, model.CommandResponseTypeEphemeral, resp.ResponseType)
+		assert.Contains(t, resp.Text, "Usage: /approve verify <APPROVAL_CODE>")
+	})
+
+	t.Run("comment too long returns error", func(t *testing.T) {
+		api := &plugintest.API{}
+		p := &Plugin{}
+		p.SetAPI(api)
+
+		// Create a comment longer than 500 characters
+		longComment := strings.Repeat("a", 501)
+		args := &model.CommandArgs{
+			Command:   "/approve verify A-X7K9Q2 " + longComment,
+			UserId:    "user123",
+			ChannelId: "channel123",
+		}
+
+		resp, appErr := p.ExecuteCommand(nil, args)
+		assert.Nil(t, appErr)
+		assert.NotNil(t, resp)
+		assert.Equal(t, model.CommandResponseTypeEphemeral, resp.ResponseType)
+		assert.Contains(t, resp.Text, "❌ Verification comment too long")
+		assert.Contains(t, resp.Text, "501 characters")
+		assert.Contains(t, resp.Text, "Maximum length is 500 characters")
+	})
+
+	t.Run("permission denied for different user", func(t *testing.T) {
+		api := &plugintest.API{}
+
+		// Mock plugin activation
+		api.On("EnsureBotUser", mock.AnythingOfType("*model.Bot")).Return("bot123", nil)
+		api.On("RegisterCommand", mock.AnythingOfType("*model.Command")).Return(nil)
+
+		// Mock KV store operations
+		api.On("KVGet", "approval:code:A-X7K9Q2").Return([]byte(`"record123"`), nil)
+
+		recordJSON := `{
+			"id": "record123",
+			"code": "A-X7K9Q2",
+			"requesterId": "user123",
+			"approverId": "approver456",
+			"status": "approved",
+			"verified": false,
+			"createdAt": 1704931200000,
+			"decidedAt": 1704931300000,
+			"schemaVersion": 1
+		}`
+		api.On("KVGet", "approval:record:record123").Return([]byte(recordJSON), nil)
+
+		// Mock error logging
+		api.On("LogError", mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return()
+		api.On("LogInfo", mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return()
+
+		p := &Plugin{}
+		p.SetAPI(api)
+		err := p.OnActivate()
+		assert.NoError(t, err)
+
+		args := &model.CommandArgs{
+			Command:   "/approve verify A-X7K9Q2",
+			UserId:    "user456", // Different user
+			ChannelId: "channel123",
+		}
+
+		resp, appErr := p.ExecuteCommand(nil, args)
+		assert.Nil(t, appErr)
+		assert.NotNil(t, resp)
+		assert.Equal(t, model.CommandResponseTypeEphemeral, resp.ResponseType)
+		assert.Contains(t, resp.Text, "❌ Permission denied")
+		assert.Contains(t, resp.Text, "Only the requester can verify")
+
+		api.AssertExpectations(t)
+	})
+
+	t.Run("cannot verify non-approved request", func(t *testing.T) {
+		api := &plugintest.API{}
+
+		// Mock plugin activation
+		api.On("EnsureBotUser", mock.AnythingOfType("*model.Bot")).Return("bot123", nil)
+		api.On("RegisterCommand", mock.AnythingOfType("*model.Command")).Return(nil)
+
+		// Mock KV store operations
+		api.On("KVGet", "approval:code:A-X7K9Q2").Return([]byte(`"record123"`), nil)
+
+		recordJSON := `{
+			"id": "record123",
+			"code": "A-X7K9Q2",
+			"requesterId": "user123",
+			"approverId": "approver456",
+			"status": "pending",
+			"verified": false,
+			"createdAt": 1704931200000,
+			"decidedAt": 0,
+			"schemaVersion": 1
+		}`
+		api.On("KVGet", "approval:record:record123").Return([]byte(recordJSON), nil)
+
+		api.On("LogInfo", mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return()
+
+		p := &Plugin{}
+		p.SetAPI(api)
+		err := p.OnActivate()
+		assert.NoError(t, err)
+
+		args := &model.CommandArgs{
+			Command:   "/approve verify A-X7K9Q2",
+			UserId:    "user123",
+			ChannelId: "channel123",
+		}
+
+		resp, appErr := p.ExecuteCommand(nil, args)
+		assert.Nil(t, appErr)
+		assert.NotNil(t, resp)
+		assert.Equal(t, model.CommandResponseTypeEphemeral, resp.ResponseType)
+		assert.Contains(t, resp.Text, "❌ Cannot verify approval request A-X7K9Q2")
+		assert.Contains(t, resp.Text, "Only approved requests can be verified")
+		assert.Contains(t, resp.Text, "current status: pending")
+
+		api.AssertExpectations(t)
+	})
+
+	t.Run("cannot verify already verified request", func(t *testing.T) {
+		api := &plugintest.API{}
+
+		// Mock plugin activation
+		api.On("EnsureBotUser", mock.AnythingOfType("*model.Bot")).Return("bot123", nil)
+		api.On("RegisterCommand", mock.AnythingOfType("*model.Command")).Return(nil)
+
+		// Mock KV store operations
+		api.On("KVGet", "approval:code:A-X7K9Q2").Return([]byte(`"record123"`), nil)
+
+		recordJSON := `{
+			"id": "record123",
+			"code": "A-X7K9Q2",
+			"requesterId": "user123",
+			"approverId": "approver456",
+			"status": "approved",
+			"verified": true,
+			"verifiedAt": 1704931400000,
+			"createdAt": 1704931200000,
+			"decidedAt": 1704931300000,
+			"schemaVersion": 1
+		}`
+		api.On("KVGet", "approval:record:record123").Return([]byte(recordJSON), nil)
+
+		api.On("LogInfo", mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return()
+
+		p := &Plugin{}
+		p.SetAPI(api)
+		err := p.OnActivate()
+		assert.NoError(t, err)
+
+		args := &model.CommandArgs{
+			Command:   "/approve verify A-X7K9Q2",
+			UserId:    "user123",
+			ChannelId: "channel123",
+		}
+
+		resp, appErr := p.ExecuteCommand(nil, args)
+		assert.Nil(t, appErr)
+		assert.NotNil(t, resp)
+		assert.Equal(t, model.CommandResponseTypeEphemeral, resp.ResponseType)
+		assert.Contains(t, resp.Text, "❌ Approval request A-X7K9Q2 has already been verified")
+
+		api.AssertExpectations(t)
+	})
+
+	t.Run("record not found returns error", func(t *testing.T) {
+		api := &plugintest.API{}
+
+		// Mock plugin activation
+		api.On("EnsureBotUser", mock.AnythingOfType("*model.Bot")).Return("bot123", nil)
+		api.On("RegisterCommand", mock.AnythingOfType("*model.Command")).Return(nil)
+
+		// Mock KV store operations - code not found
+		api.On("KVGet", "approval:code:A-NOTFND").Return(nil, nil)
+
+		api.On("LogError", mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return()
+		api.On("LogInfo", mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return()
+
+		p := &Plugin{}
+		p.SetAPI(api)
+		err := p.OnActivate()
+		assert.NoError(t, err)
+
+		args := &model.CommandArgs{
+			Command:   "/approve verify A-NOTFND",
+			UserId:    "user123",
+			ChannelId: "channel123",
+		}
+
+		resp, appErr := p.ExecuteCommand(nil, args)
+		assert.Nil(t, appErr)
+		assert.NotNil(t, resp)
+		assert.Equal(t, model.CommandResponseTypeEphemeral, resp.ResponseType)
+		assert.Contains(t, resp.Text, "❌ Approval request 'A-NOTFND' not found")
+		assert.Contains(t, resp.Text, "Use `/approve list` to see your requests")
+
+		api.AssertExpectations(t)
+	})
+}
+
 func TestServeHTTP(t *testing.T) {
 	t.Run("routes /action to handleAction", func(t *testing.T) {
 		api := &plugintest.API{}

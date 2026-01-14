@@ -416,3 +416,264 @@ func TestCancelApproval_CorruptedIndex(t *testing.T) {
 
 	mockStore.AssertExpectations(t)
 }
+
+// TestVerifyRequest verifies the verification flow with various scenarios
+func TestVerifyRequest(t *testing.T) {
+	tests := []struct {
+		name           string
+		approvalCode   string
+		requesterID    string
+		comment        string
+		existingRecord *ApprovalRecord
+		getByCodeErr   error
+		saveErr        error
+		wantErr        bool
+		errContains    string
+		wantVerified   bool
+	}{
+		{
+			name:         "successful verification without comment",
+			approvalCode: "A-X7K9Q2",
+			requesterID:  "user123",
+			comment:      "",
+			existingRecord: &ApprovalRecord{
+				ID:          "abc123",
+				Code:        "A-X7K9Q2",
+				RequesterID: "user123",
+				ApproverID:  "approver456",
+				Status:      StatusApproved,
+				DecidedAt:   1704931300000,
+				Verified:    false,
+			},
+			getByCodeErr: nil,
+			saveErr:      nil,
+			wantErr:      false,
+			wantVerified: true,
+		},
+		{
+			name:         "successful verification with comment",
+			approvalCode: "A-X7K9Q2",
+			requesterID:  "user123",
+			comment:      "Deployment completed successfully",
+			existingRecord: &ApprovalRecord{
+				ID:          "abc123",
+				Code:        "A-X7K9Q2",
+				RequesterID: "user123",
+				ApproverID:  "approver456",
+				Status:      StatusApproved,
+				DecidedAt:   1704931300000,
+				Verified:    false,
+			},
+			getByCodeErr: nil,
+			saveErr:      nil,
+			wantErr:      false,
+			wantVerified: true,
+		},
+		{
+			name:         "permission denied - different user",
+			approvalCode: "A-X7K9Q2",
+			requesterID:  "user456",
+			comment:      "",
+			existingRecord: &ApprovalRecord{
+				ID:          "abc123",
+				Code:        "A-X7K9Q2",
+				RequesterID: "user123",
+				ApproverID:  "approver456",
+				Status:      StatusApproved,
+				DecidedAt:   1704931300000,
+				Verified:    false,
+			},
+			getByCodeErr: nil,
+			wantErr:      true,
+			errContains:  "permission denied",
+			wantVerified: false,
+		},
+		{
+			name:         "cannot verify pending request",
+			approvalCode: "A-X7K9Q2",
+			requesterID:  "user123",
+			comment:      "",
+			existingRecord: &ApprovalRecord{
+				ID:          "abc123",
+				Code:        "A-X7K9Q2",
+				RequesterID: "user123",
+				ApproverID:  "approver456",
+				Status:      StatusPending,
+				DecidedAt:   0,
+				Verified:    false,
+			},
+			getByCodeErr: nil,
+			wantErr:      true,
+			errContains:  "not approved",
+			wantVerified: false,
+		},
+		{
+			name:         "cannot verify denied request",
+			approvalCode: "A-X7K9Q2",
+			requesterID:  "user123",
+			comment:      "",
+			existingRecord: &ApprovalRecord{
+				ID:          "abc123",
+				Code:        "A-X7K9Q2",
+				RequesterID: "user123",
+				ApproverID:  "approver456",
+				Status:      StatusDenied,
+				DecidedAt:   1704931300000,
+				Verified:    false,
+			},
+			getByCodeErr: nil,
+			wantErr:      true,
+			errContains:  "not approved",
+			wantVerified: false,
+		},
+		{
+			name:         "cannot verify canceled request",
+			approvalCode: "A-X7K9Q2",
+			requesterID:  "user123",
+			comment:      "",
+			existingRecord: &ApprovalRecord{
+				ID:            "abc123",
+				Code:          "A-X7K9Q2",
+				RequesterID:   "user123",
+				ApproverID:    "approver456",
+				Status:        StatusCanceled,
+				CanceledAt:    1704931300000,
+				CanceledReason: "No longer needed",
+				Verified:      false,
+			},
+			getByCodeErr: nil,
+			wantErr:      true,
+			errContains:  "not approved",
+			wantVerified: false,
+		},
+		{
+			name:         "cannot verify already verified request",
+			approvalCode: "A-X7K9Q2",
+			requesterID:  "user123",
+			comment:      "",
+			existingRecord: &ApprovalRecord{
+				ID:                  "abc123",
+				Code:                "A-X7K9Q2",
+				RequesterID:         "user123",
+				ApproverID:          "approver456",
+				Status:              StatusApproved,
+				DecidedAt:           1704931300000,
+				Verified:            true,
+				VerifiedAt:          1704931400000,
+				VerificationComment: "Already done",
+			},
+			getByCodeErr: nil,
+			wantErr:      true,
+			errContains:  "already verified",
+			wantVerified: true,
+		},
+		{
+			name:         "approval not found",
+			approvalCode: "A-NOTFND",
+			requesterID:  "user123",
+			comment:      "",
+			existingRecord: nil,
+			getByCodeErr:   ErrRecordNotFound,
+			wantErr:        true,
+			errContains:    "failed to retrieve approval",
+			wantVerified:   false,
+		},
+		{
+			name:         "invalid approval code format",
+			approvalCode: "INVALID",
+			requesterID:  "user123",
+			comment:      "",
+			existingRecord: nil,
+			getByCodeErr:   nil,
+			wantErr:        true,
+			errContains:    "invalid approval code format",
+			wantVerified:   false,
+		},
+		{
+			name:         "empty approval code",
+			approvalCode: "",
+			requesterID:  "user123",
+			comment:      "",
+			existingRecord: nil,
+			getByCodeErr:   nil,
+			wantErr:        true,
+			errContains:    "approval code is required",
+			wantVerified:   false,
+		},
+		{
+			name:         "empty requester ID",
+			approvalCode: "A-X7K9Q2",
+			requesterID:  "",
+			comment:      "",
+			existingRecord: nil,
+			getByCodeErr:   nil,
+			wantErr:        true,
+			errContains:    "requester ID is required",
+			wantVerified:   false,
+		},
+		{
+			name:         "save failure",
+			approvalCode: "A-X7K9Q2",
+			requesterID:  "user123",
+			comment:      "",
+			existingRecord: &ApprovalRecord{
+				ID:          "abc123",
+				Code:        "A-X7K9Q2",
+				RequesterID: "user123",
+				ApproverID:  "approver456",
+				Status:      StatusApproved,
+				DecidedAt:   1704931300000,
+				Verified:    false,
+			},
+			getByCodeErr: nil,
+			saveErr:      errors.New("database error"),
+			wantErr:      true,
+			errContains:  "failed to save verified approval",
+			wantVerified: false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			mockStore := new(MockApprovalStore)
+			mockAPI := &plugintest.API{}
+
+			// Setup mocks only if we expect GetByCode to be called
+			if tt.approvalCode != "" && !strings.Contains(tt.errContains, "approval code is required") &&
+				!strings.Contains(tt.errContains, "invalid approval code format") &&
+				tt.requesterID != "" {
+				mockStore.On("GetByCode", tt.approvalCode).Return(tt.existingRecord, tt.getByCodeErr)
+			}
+
+			// Setup save mock only if we expect to reach SaveApproval
+			if !tt.wantErr || tt.saveErr != nil {
+				mockStore.On("SaveApproval", mock.AnythingOfType("*approval.ApprovalRecord")).Return(tt.saveErr)
+			}
+
+			// Mock LogInfo for successful verifications
+			if !tt.wantErr {
+				mockAPI.On("LogInfo", mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return()
+			}
+
+			service := NewService(mockStore, mockAPI, "bot-user-id")
+			err := service.VerifyRequest(tt.approvalCode, tt.requesterID, tt.comment)
+
+			if tt.wantErr {
+				assert.Error(t, err)
+				assert.Contains(t, err.Error(), tt.errContains)
+			} else {
+				assert.NoError(t, err)
+
+				// Verify record was updated correctly
+				mockStore.AssertCalled(t, "SaveApproval", mock.MatchedBy(func(r *ApprovalRecord) bool {
+					return r.Verified == tt.wantVerified &&
+						r.VerifiedAt > 0 &&
+						r.VerificationComment == tt.comment
+				}))
+			}
+
+			mockStore.AssertExpectations(t)
+			mockAPI.AssertExpectations(t)
+		})
+	}
+}

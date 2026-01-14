@@ -1542,5 +1542,202 @@ func TestSendCancellationNotificationDM(t *testing.T) {
 	})
 }
 
+func TestSendVerificationNotificationDM(t *testing.T) {
+	t.Run("successful verification notification without comment", func(t *testing.T) {
+		// Setup mock API
+		api := &plugintest.API{}
+		botUserID := "bot123"
+		approverID := "approver456"
+		dmChannelID := "dm789"
+
+		api.On("GetDirectChannel", botUserID, approverID).Return(&model.Channel{Id: dmChannelID}, nil)
+		api.On("CreatePost", mock.MatchedBy(func(post *model.Post) bool {
+			return post.UserId == botUserID &&
+				post.ChannelId == dmChannelID &&
+				strings.Contains(post.Message, "✅ **Approval Request Verified**") &&
+				strings.Contains(post.Message, "A-X7K9Q2") &&
+				strings.Contains(post.Message, "@alice") &&
+				strings.Contains(post.Message, "Deploy to production") &&
+				!strings.Contains(post.Message, "Verification Note")
+		})).Return(&model.Post{Id: "notification_post_123"}, nil)
+
+		// Create test approval record
+		record := &approval.ApprovalRecord{
+			ID:                  "approval123",
+			Code:                "A-X7K9Q2",
+			ApproverID:          approverID,
+			RequesterID:         "requester123",
+			RequesterUsername:   "alice",
+			RequesterDisplayName: "Alice Smith",
+			Description:         "Deploy to production",
+			Status:              approval.StatusApproved,
+			Verified:            true,
+			VerifiedAt:          1704931400000, // Jan 10, 2024
+			VerificationComment: "",
+		}
+
+		// Execute
+		postID, err := SendVerificationNotificationDM(api, botUserID, record)
+
+		// Assert
+		assert.NoError(t, err)
+		assert.Equal(t, "notification_post_123", postID)
+		api.AssertExpectations(t)
+	})
+
+	t.Run("successful verification notification with comment", func(t *testing.T) {
+		// Setup mock API
+		api := &plugintest.API{}
+		botUserID := "bot123"
+		approverID := "approver456"
+		dmChannelID := "dm789"
+
+		api.On("GetDirectChannel", botUserID, approverID).Return(&model.Channel{Id: dmChannelID}, nil)
+		api.On("CreatePost", mock.MatchedBy(func(post *model.Post) bool {
+			return post.UserId == botUserID &&
+				post.ChannelId == dmChannelID &&
+				strings.Contains(post.Message, "✅ **Approval Request Verified**") &&
+				strings.Contains(post.Message, "A-X7K9Q2") &&
+				strings.Contains(post.Message, "@alice") &&
+				strings.Contains(post.Message, "Deploy to production") &&
+				strings.Contains(post.Message, "**Verification Note:**") &&
+				strings.Contains(post.Message, "Deployment completed successfully")
+		})).Return(&model.Post{Id: "notification_post_123"}, nil)
+
+		// Create test approval record with comment
+		record := &approval.ApprovalRecord{
+			ID:                  "approval123",
+			Code:                "A-X7K9Q2",
+			ApproverID:          approverID,
+			RequesterID:         "requester123",
+			RequesterUsername:   "alice",
+			RequesterDisplayName: "Alice Smith",
+			Description:         "Deploy to production",
+			Status:              approval.StatusApproved,
+			Verified:            true,
+			VerifiedAt:          1704931400000,
+			VerificationComment: "Deployment completed successfully",
+		}
+
+		// Execute
+		postID, err := SendVerificationNotificationDM(api, botUserID, record)
+
+		// Assert
+		assert.NoError(t, err)
+		assert.Equal(t, "notification_post_123", postID)
+		api.AssertExpectations(t)
+	})
+
+	t.Run("empty bot user ID returns error", func(t *testing.T) {
+		api := &plugintest.API{}
+
+		record := &approval.ApprovalRecord{
+			ID:         "approval123",
+			ApproverID: "approver456",
+			Verified:   true,
+		}
+
+		// Execute with empty botUserID
+		_, err := SendVerificationNotificationDM(api, "", record)
+
+		// Assert
+		assert.Error(t, err)
+		assert.Contains(t, err.Error(), "bot user ID not available")
+	})
+
+	t.Run("nil record returns error", func(t *testing.T) {
+		api := &plugintest.API{}
+		botUserID := "bot123"
+
+		// Execute with nil record
+		_, err := SendVerificationNotificationDM(api, botUserID, nil)
+
+		// Assert
+		assert.Error(t, err)
+		assert.Contains(t, err.Error(), "approval record is nil")
+	})
+
+	t.Run("empty approval ID returns error", func(t *testing.T) {
+		api := &plugintest.API{}
+		botUserID := "bot123"
+
+		record := &approval.ApprovalRecord{
+			ID:         "", // Empty ID
+			ApproverID: "approver456",
+		}
+
+		// Execute with empty ID
+		_, err := SendVerificationNotificationDM(api, botUserID, record)
+
+		// Assert
+		assert.Error(t, err)
+		assert.Contains(t, err.Error(), "approval record ID is empty")
+	})
+
+	t.Run("empty approver ID returns error", func(t *testing.T) {
+		api := &plugintest.API{}
+		botUserID := "bot123"
+
+		record := &approval.ApprovalRecord{
+			ID:         "approval123",
+			ApproverID: "", // Empty approver ID
+		}
+
+		// Execute with empty approver ID
+		_, err := SendVerificationNotificationDM(api, botUserID, record)
+
+		// Assert
+		assert.Error(t, err)
+		assert.Contains(t, err.Error(), "approver ID is empty")
+	})
+
+	t.Run("get DM channel failure returns error", func(t *testing.T) {
+		api := &plugintest.API{}
+		botUserID := "bot123"
+		approverID := "approver456"
+
+		// Mock GetDirectChannel to return error
+		api.On("GetDirectChannel", botUserID, approverID).Return(nil, &model.AppError{Message: "channel error"})
+
+		record := &approval.ApprovalRecord{
+			ID:         "approval123",
+			ApproverID: approverID,
+		}
+
+		// Execute
+		_, err := SendVerificationNotificationDM(api, botUserID, record)
+
+		// Assert
+		assert.Error(t, err)
+		assert.Contains(t, err.Error(), "failed to get DM channel")
+		api.AssertExpectations(t)
+	})
+
+	t.Run("create post failure returns error", func(t *testing.T) {
+		api := &plugintest.API{}
+		botUserID := "bot123"
+		approverID := "approver456"
+		dmChannelID := "dm789"
+
+		api.On("GetDirectChannel", botUserID, approverID).Return(&model.Channel{Id: dmChannelID}, nil)
+		api.On("CreatePost", mock.AnythingOfType("*model.Post")).Return(nil, &model.AppError{Message: "post error"})
+
+		record := &approval.ApprovalRecord{
+			ID:         "approval123",
+			ApproverID: approverID,
+			Verified:   true,
+			VerifiedAt: 1704931400000,
+		}
+
+		// Execute
+		_, err := SendVerificationNotificationDM(api, botUserID, record)
+
+		// Assert
+		assert.Error(t, err)
+		assert.Contains(t, err.Error(), "failed to send verification notification")
+		api.AssertExpectations(t)
+	})
+}
+
 // Helper function to verify the plugin.API interface is satisfied
 var _ plugin.API = (*plugintest.API)(nil)

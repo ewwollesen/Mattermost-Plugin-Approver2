@@ -1142,3 +1142,219 @@ So that users can only view records where they are authorized participants.
 
 **Covers:** FR37 (access control - users only view their records), NFR-S1 (authenticated via Mattermost), NFR-S2 (users only access their records), NFR-S3 (prevent spoofing), NFR-S4 (prevent unauthorized modification), NFR-S5 (sensitive data not logged), NFR-S6 (Mattermost security model)
 
+---
+
+## Epic 6: Request Timeout & Verification (Feature Complete for 1.0)
+
+Users can configure automatic timeout for unanswered approval requests (default 30 minutes), preventing abandoned requests from cluttering the system. Requesters can verify approved requests to confirm action completion, closing the approval loop with optional comments and notifying approvers.
+
+### Story 6.1: Auto-Timeout for Pending Approval Requests
+
+As a requester,
+I want pending approval requests to automatically cancel after a timeout period,
+So that unanswered requests don't clutter the system and I'm notified when requests expire.
+
+**Acceptance Criteria:**
+
+**Given** an approval request is created with status "pending"
+**When** the system persists the record
+**Then** a timeout timer starts based on the CreatedAt timestamp
+**And** the default timeout duration is 30 minutes (system-wide configurable)
+
+**Given** a pending approval request exists
+**When** the current time exceeds (CreatedAt + 30 minutes)
+**Then** the system automatically updates the record:
+  - Status: "canceled"
+  - CanceledReason: "Auto-canceled: No response within 30 minutes"
+  - CanceledAt: current timestamp (epoch millis)
+**And** the update is persisted atomically to the KV store
+
+**Given** an approval request times out
+**When** the system processes the auto-cancellation
+**Then** a DM notification is sent to the requester within 5 seconds
+**And** the DM includes:
+  - Header: "⏱️ **Approval Request Timed Out**"
+  - Request ID: "{Code}"
+  - Original request: "**Original Request:**\n> {description}" (quoted)
+  - Approver info: "**Approver:** @{approverUsername} ({approverDisplayName})"
+  - Timeout info: "**Reason:** No response within 30 minutes"
+  - Action statement: "**Status:** This request has been automatically canceled. You may create a new request if still needed."
+
+**Given** an approval request times out
+**When** the system sends the timeout notification
+**Then** NO notification is sent to the approver (requester-only notification)
+**And** the approver's original notification remains unchanged
+**And** the approver can no longer approve/deny (buttons disabled with "This request has been canceled" message)
+
+**Given** an approver clicks Approve or Deny on a pending request
+**When** the decision is recorded BEFORE the timeout expires
+**Then** the timeout timer stops immediately (race condition handling)
+**And** the status becomes "approved" or "denied"
+**And** the auto-timeout does NOT trigger for this request
+**And** the requester receives the normal decision notification (not timeout notification)
+
+**Given** the timeout timer and approver decision occur nearly simultaneously
+**When** both operations attempt to update the record
+**Then** only the first operation succeeds (last-write-wins with immutability check)
+**And** if the approver decision arrives first, status becomes "approved"/"denied"
+**And** if the timeout arrives first, status becomes "canceled"
+**And** the second operation fails with ErrRecordImmutable
+**And** no duplicate notifications are sent
+
+**Given** an approval request has status "approved", "denied", or "canceled"
+**When** the timeout period elapses
+**Then** the auto-timeout does NOT trigger (only pending requests time out)
+**And** the immutability rule prevents any modification
+
+**Given** the system configuration allows customizing the timeout duration
+**When** the timeout is configured (future enhancement - out of scope for MVP)
+**Then** the timeout duration can be set system-wide (e.g., 15 minutes, 1 hour, 24 hours)
+**And** the default remains 30 minutes if not configured
+**Note:** MVP uses hardcoded 30 minute timeout; configuration is deferred to post-MVP
+
+**Given** the timeout notification fails to send
+**When** the DM delivery fails
+**Then** the approval record remains canceled (data integrity prioritized)
+**And** the error is logged for debugging
+**And** the system does not retry automatically
+
+**Given** a user executes `/approve list`
+**When** the results include timed-out requests
+**Then** the status shows: "🚫 Canceled"
+**And** the CanceledReason indicates: "Auto-canceled: No response within 30 minutes"
+
+**Given** a user executes `/approve get <CODE>` for a timed-out request
+**When** the detailed view is displayed
+**Then** the output includes:
+  - Status: "🚫 Canceled"
+  - Canceled timestamp
+  - Cancellation reason: "Auto-canceled: No response within 30 minutes"
+**And** the record is immutable (cannot be modified)
+
+**Technical Implementation Notes:**
+- Timeout check runs periodically (e.g., every 5 minutes via background goroutine or scheduled task)
+- Query pending requests where: `Status == "pending" AND (CurrentTime - CreatedAt) > 30 minutes`
+- Process batch of timed-out requests, update atomically, send notifications
+- Index cleanup: remove from pending approver index, add to requester index with canceled status
+
+**Covers:** NFR-R3 (graceful degradation), NFR-P3 (<5s notification), NFR-R1 (atomic persistence), NFR-R2 (concurrent request handling), UX requirement (structured formatting), Architecture requirement (immutability enforcement)
+
+### Story 6.2: Verification Step for Approved Requests
+
+As a requester,
+I want to verify that I completed the approved action,
+So that I can close the approval loop and notify the approver that the action is done.
+
+**Acceptance Criteria:**
+
+**Given** a requester has an approved request
+**When** the requester types `/approve verify <CODE> [optional comment]`
+**Then** the system retrieves the approval record by code
+**And** verifies the authenticated user is the original requester (permission check)
+
+**Given** the approval record has status "approved"
+**When** the verify command is executed by the requester
+**Then** the system updates the ApprovalRecord with new fields:
+  - Verified: true (boolean)
+  - VerifiedAt: current timestamp (epoch millis)
+  - VerificationComment: {comment text or empty string}
+**And** the Status field remains "approved" (verification is separate metadata)
+**And** the update is persisted atomically to the KV store
+**And** the operation completes within 2 seconds
+
+**Given** the verification is successful
+**When** the system confirms the verification
+**Then** an ephemeral message is posted to the requester:
+  - "✅ Verification recorded for approval request {Code}."
+  - "The approver will be notified that the action is complete."
+**And** the message appears within 1 second
+
+**Given** a verification is recorded
+**When** the system processes the verification
+**Then** a DM notification is sent to the approver within 5 seconds
+**And** the DM includes:
+  - Header: "✅ **Action Verified Complete**"
+  - Request ID: "{Code}"
+  - Requester info: "**Requester:** @{requesterUsername} ({requesterDisplayName})"
+  - Verification time: "**Verified:** {timestamp in YYYY-MM-DD HH:MM:SS UTC format}"
+  - Original request: "**Original Request:**\n> {description}" (quoted)
+  - Verification comment (if provided): "**Verification Comment:**\n{verificationComment}"
+  - Action statement: "**Status:** The requester has confirmed this action is complete."
+
+**Given** the verification command includes an optional comment
+**When** the comment is provided
+**Then** the comment is stored in VerificationComment field (max 500 characters)
+**And** the comment is included in the approver notification
+**And** the comment is validated before submission
+
+**Given** the verification command does not include a comment
+**When** the verify command is executed
+**Then** VerificationComment is stored as empty string
+**And** the "Verification Comment" section is omitted from the notification
+
+**Given** a requester types `/approve verify` without providing a code
+**When** the command is processed
+**Then** the system returns help text:
+  - "Usage: /approve verify <APPROVAL_ID> [optional comment]"
+  - "Example: /approve verify A-X7K9Q2"
+  - "Example: /approve verify A-X7K9Q2 Rollback completed successfully"
+
+**Given** a requester types `/approve verify INVALID-CODE`
+**When** the command is processed
+**Then** the system returns an error: "❌ Approval request 'INVALID-CODE' not found. Use `/approve list` to see your requests."
+
+**Given** the authenticated user is NOT the original requester
+**When** they attempt to verify a request
+**Then** the system returns an error: "❌ Permission denied. Only the requester can verify completion of an approval request."
+**And** the approval record is not modified
+
+**Given** the approval record status is "pending", "denied", or "canceled"
+**When** the verify command is executed
+**Then** the system returns an error: "❌ Cannot verify approval request {Code}. Only approved requests can be verified. (Current status: {Status})"
+**And** the approval record is not modified
+
+**Given** the approval record is already verified (Verified == true)
+**When** the verify command is executed
+**Then** the system returns an error: "❌ Approval request {Code} has already been verified on {VerifiedAt timestamp}."
+**And** the existing verification is not modified (immutability - one-time verification only)
+
+**Given** a user executes `/approve get <CODE>` for a verified request
+**When** the detailed view is displayed
+**Then** the output includes a new "Verification" section:
+```
+**Verification:**
+- ✅ Verified on: 2026-01-10 15:30:00 UTC
+- Comment: Rollback completed successfully
+```
+**And** the section appears after the "Decision Comment" section
+**And** if not verified, the "Verification" section is omitted
+
+**Given** a user executes `/approve list`
+**When** the results include verified requests
+**Then** the status shows: "✅ Approved" (same as unverified approved requests)
+**And** verification status is NOT shown in the list view (only in detail view via `/approve get`)
+
+**Given** the verification notification fails to send
+**When** the DM delivery fails
+**Then** the verification record remains valid (data integrity prioritized)
+**And** the error is logged for debugging
+**And** the system does not retry automatically
+**And** the requester's confirmation still shows success
+
+**Given** the verification comment exceeds 500 characters
+**When** the system validates the input
+**Then** an error message displays: "❌ Verification comment is too long (max 500 characters). Please shorten your comment."
+**And** the verification is not recorded
+
+**Technical Implementation Notes:**
+- Add three new fields to ApprovalRecord struct:
+  - Verified bool `json:"verified"`
+  - VerifiedAt int64 `json:"verifiedAt"` (epoch millis, 0 if not verified)
+  - VerificationComment string `json:"verificationComment"`
+- Default values: Verified=false, VerifiedAt=0, VerificationComment=""
+- Verification is one-time only: if Verified==true, reject subsequent verify attempts
+- Verification does not change Status field (remains "approved")
+- Schema version remains 1 (these fields are additive, backward compatible)
+
+**Covers:** FR37 (access control), FR36 (Mattermost authentication), FR11 (precise timestamps), FR29 (immediate feedback), NFR-S2 (access control), NFR-P2 (<2s response), NFR-P3 (<5s notification), NFR-R1 (atomic persistence), UX requirement (structured formatting), UX requirement (explicit timestamps)
+

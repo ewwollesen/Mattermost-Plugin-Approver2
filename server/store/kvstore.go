@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"sort"
 	"strings"
+	"time"
 
 	"github.com/mattermost/mattermost-plugin-approver2/server/approval"
 	"github.com/mattermost/mattermost/server/public/plugin"
@@ -22,6 +23,59 @@ func NewKVStore(api plugin.API) *KVStore {
 	}
 }
 
+// isValidVerificationUpdate checks if an update to a decided record is a valid verification operation.
+// Story 6.2: Allows adding verification fields to approved records while keeping core fields immutable.
+// Returns true if:
+// - Status is approved (not denied/canceled)
+// - Only verification fields changed (Verified, VerifiedAt, VerificationComment)
+// - Core decision fields remain unchanged (Status, DecidedAt, DecisionComment, etc.)
+func isValidVerificationUpdate(existing, updated *approval.ApprovalRecord) bool {
+	// Only allow verification updates on approved records
+	if existing.Status != approval.StatusApproved {
+		return false
+	}
+
+	// Verify core immutable fields haven't changed
+	if existing.ID != updated.ID ||
+		existing.Code != updated.Code ||
+		existing.Status != updated.Status ||
+		existing.RequesterID != updated.RequesterID ||
+		existing.RequesterUsername != updated.RequesterUsername ||
+		existing.RequesterDisplayName != updated.RequesterDisplayName ||
+		existing.ApproverID != updated.ApproverID ||
+		existing.ApproverUsername != updated.ApproverUsername ||
+		existing.ApproverDisplayName != updated.ApproverDisplayName ||
+		existing.Description != updated.Description ||
+		existing.DecisionComment != updated.DecisionComment ||
+		existing.CreatedAt != updated.CreatedAt ||
+		existing.DecidedAt != updated.DecidedAt ||
+		existing.CanceledReason != updated.CanceledReason ||
+		existing.CanceledAt != updated.CanceledAt ||
+		existing.RequestChannelID != updated.RequestChannelID ||
+		existing.TeamID != updated.TeamID ||
+		existing.NotificationSent != updated.NotificationSent ||
+		existing.NotificationPostID != updated.NotificationPostID ||
+		existing.OutcomeNotified != updated.OutcomeNotified ||
+		existing.SchemaVersion != updated.SchemaVersion {
+		return false
+	}
+
+	// Allow changes only to verification fields
+	// This is valid if: !existing.Verified && updated.Verified (first-time verification)
+	if existing.Verified {
+		// Already verified - no further changes allowed
+		return false
+	}
+
+	// New verification: Verified must be set to true, VerifiedAt must be > 0
+	if !updated.Verified || updated.VerifiedAt == 0 {
+		return false
+	}
+
+	// Valid verification update
+	return true
+}
+
 // SaveApproval persists an ApprovalRecord to the KV store
 func (s *KVStore) SaveApproval(record *approval.ApprovalRecord) error {
 	if record == nil {
@@ -35,9 +89,12 @@ func (s *KVStore) SaveApproval(record *approval.ApprovalRecord) error {
 	// Enforce immutability: check if record exists and is finalized
 	existing, err := s.GetApproval(record.ID)
 	if err == nil {
-		// Record exists - check if it's immutable
+		// Record exists - check if modifications violate immutability
 		if existing.Status != approval.StatusPending {
-			return fmt.Errorf("cannot modify approval record %s: %w", record.ID, approval.ErrRecordImmutable)
+			// Decided records are generally immutable, but allow verification updates (Story 6.2)
+			if !isValidVerificationUpdate(existing, record) {
+				return fmt.Errorf("cannot modify approval record %s: %w", record.ID, approval.ErrRecordImmutable)
+			}
 		}
 	}
 	// If record doesn't exist (ErrRecordNotFound), proceed with save
@@ -444,4 +501,102 @@ func makeApproverIndexKey(userID string, timestamp int64, recordID string) strin
 	// Invert timestamp for descending order (most recent first)
 	invertedTimestamp := 9999999999999 - timestamp
 	return fmt.Sprintf("approval:index:approver:%s:%013d:%s", userID, invertedTimestamp, recordID)
+}
+
+// GetPendingRequestsOlderThan retrieves all pending approval requests older than the specified duration
+// This method is used by the timeout checker to find abandoned requests for auto-cancellation.
+//
+// Performance: Scans all approver index keys and filters by:
+// 1. Status == "pending" (only pending requests can time out)
+// 2. (CurrentTime - CreatedAt) > cutoffDuration
+//
+// Returns records in arbitrary order (timeout processing doesn't require ordering).
+//
+// TODO: Add pagination support for systems with thousands of pending requests.
+// Current implementation scans all index keys without pagination (using MaxApprovalRecordsLimit),
+// which is acceptable for MVP but may impact performance at scale.
+func (s *KVStore) GetPendingRequestsOlderThan(cutoffDuration time.Duration) ([]*approval.ApprovalRecord, error) {
+	// Calculate cutoff timestamp (requests created before this are considered old)
+	cutoffTime := time.Now().Add(-cutoffDuration).Unix() * 1000 // Convert to epoch millis
+
+	// List all keys in KV store
+	keys, appErr := s.api.KVList(0, MaxApprovalRecordsLimit)
+	if appErr != nil {
+		return nil, fmt.Errorf("failed to list KV store keys: %w", appErr)
+	}
+
+	// Track unique pending old records
+	seenRecords := make(map[string]bool)
+	records := make([]*approval.ApprovalRecord, 0)
+
+	// Scan all approver index keys to find old pending requests
+	// Format: approval:index:approver:{userID}:{invertedTimestamp}:{recordID}
+	approverIndexPrefix := "approval:index:approver:"
+
+	for _, key := range keys {
+		// Filter for approver index keys only
+		if len(key) < len(approverIndexPrefix) || key[:len(approverIndexPrefix)] != approverIndexPrefix {
+			continue
+		}
+
+		// Get the record ID from the index
+		recordIDData, getErr := s.api.KVGet(key)
+		if getErr != nil {
+			s.api.LogWarn("Failed to get record ID from approver index during timeout scan",
+				"key", key,
+				"error", getErr.Error(),
+			)
+			continue
+		}
+
+		if recordIDData == nil {
+			continue
+		}
+
+		var recordID string
+		if err := json.Unmarshal(recordIDData, &recordID); err != nil {
+			s.api.LogWarn("Failed to unmarshal record ID from approver index during timeout scan",
+				"key", key,
+				"error", err.Error(),
+			)
+			continue
+		}
+
+		// Skip if already seen (avoid duplicates)
+		if seenRecords[recordID] {
+			continue
+		}
+		seenRecords[recordID] = true
+
+		// Retrieve the full record
+		record, err := s.GetApproval(recordID)
+		if err != nil {
+			s.api.LogWarn("Failed to retrieve approval record during timeout scan",
+				"record_id", recordID,
+				"error", err.Error(),
+			)
+			continue
+		}
+
+		// Filter 1: Only pending requests can time out
+		if record.Status != approval.StatusPending {
+			continue
+		}
+
+		// Filter 2: Check if request is older than cutoff
+		if record.CreatedAt > cutoffTime {
+			continue // Request is too new
+		}
+
+		// This is a pending request older than cutoff - add to results
+		records = append(records, record)
+	}
+
+	s.api.LogDebug("Completed timeout scan",
+		"cutoff_duration", cutoffDuration.String(),
+		"cutoff_timestamp", cutoffTime,
+		"pending_old_requests", len(records),
+	)
+
+	return records, nil
 }

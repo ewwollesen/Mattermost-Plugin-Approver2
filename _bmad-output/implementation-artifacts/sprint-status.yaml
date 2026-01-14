@@ -1,4 +1,4 @@
-# generated: 2026-01-10
+# generated: 2026-01-13
 # project: Mattermost-Plugin-Approver2
 # project_key: mattermost-plugin-approver2
 # tracking_system: file-system
@@ -33,7 +33,7 @@
 # - SM typically creates next story after previous one is 'done' to incorporate learnings
 # - Dev moves story to 'review', then runs code-review (fresh context, different LLM recommended)
 
-generated: 2026-01-10
+generated: 2026-01-13
 project: Mattermost-Plugin-Approver2
 project_key: mattermost-plugin-approver2
 tracking_system: file-system
@@ -86,3 +86,9 @@ development_status:
   5-1-add-filter-parameter-to-list-command: done
   5-2-change-default-behavior-add-count-display: done
   epic-5-retrospective: optional
+
+  # Epic 6: Request Timeout & Verification (Feature Complete for 1.0)
+  epic-6: done
+  6-1-auto-timeout-for-pending-approval-requests: done
+  6-2-verification-step-for-approved-requests: done
+  epic-6-retrospective: optional

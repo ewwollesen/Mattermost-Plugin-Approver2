@@ -85,6 +85,7 @@ func executeHelp() *model.CommandResponse {
   * **all** - all requests (pending, approved, denied, canceled)
 * **/approve get [ID]** - View a specific approval by ID
 * **/approve cancel <APPROVAL_ID>** - Cancel a pending approval request
+* **/approve verify <APPROVAL_CODE> [comment]** - Mark an approved request as verified/complete
 * **/approve status** - View approval system statistics (admin only)
 * **/approve help** - Display this help text
 
@@ -109,7 +110,7 @@ For more information, visit the plugin documentation.`
 
 // executeUnknown returns error for unrecognized commands
 func executeUnknown(subcommand string) *model.CommandResponse {
-	errorText := fmt.Sprintf("Unknown command: **%s**\n\nValid commands: `new`, `list`, `get`, `cancel`, `status`, `help`\n\nType `/approve help` for more information.", subcommand)
+	errorText := fmt.Sprintf("Unknown command: **%s**\n\nValid commands: `new`, `list`, `get`, `cancel`, `verify`, `status`, `help`\n\nType `/approve help` for more information.", subcommand)
 
 	return &model.CommandResponse{
 		ResponseType: model.CommandResponseTypeEphemeral,
@@ -816,6 +817,29 @@ func formatRecordDetail(record *approval.ApprovalRecord) string {
 	// Decision comment (only if present) (AC3)
 	if record.DecisionComment != "" {
 		output.WriteString(fmt.Sprintf("\n**Decision Comment:**\n%s\n", record.DecisionComment))
+	}
+
+	// Verification details (Story 6.2: display verification info for verified approved requests)
+	if record.Status == approval.StatusApproved && record.Verified {
+		output.WriteString("\n---\n\n")
+		output.WriteString("**✅ Verification:**\n")
+
+		// Verification timestamp
+		if record.VerifiedAt > 0 {
+			verifiedTime := time.Unix(0, record.VerifiedAt*int64(time.Millisecond))
+			formattedVerified := verifiedTime.UTC().Format("2006-01-02 15:04:05 MST")
+			output.WriteString(fmt.Sprintf("**Verified:** %s\n", formattedVerified))
+		}
+
+		// Verified by (always the requester in Story 6.2)
+		output.WriteString(fmt.Sprintf("**Verified by:** @%s\n", record.RequesterUsername))
+
+		// Verification comment (optional)
+		if record.VerificationComment != "" {
+			output.WriteString(fmt.Sprintf("**Note:** %s\n", record.VerificationComment))
+		}
+
+		output.WriteString("\n") // Spacing before next section
 	}
 
 	// Context section (AC3)

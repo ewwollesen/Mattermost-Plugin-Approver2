@@ -27,6 +27,9 @@ func TestApprovalRecord_JSONSerialization(t *testing.T) {
 		TeamID:               "team012",
 		NotificationSent:     false,
 		OutcomeNotified:      false,
+		Verified:             false,
+		VerifiedAt:           0,
+		VerificationComment:  "",
 		SchemaVersion:        1,
 	}
 
@@ -48,6 +51,9 @@ func TestApprovalRecord_JSONSerialization(t *testing.T) {
 	assert.Equal(t, record.Description, decoded.Description)
 	assert.Equal(t, record.Status, decoded.Status)
 	assert.Equal(t, record.CreatedAt, decoded.CreatedAt)
+	assert.Equal(t, record.Verified, decoded.Verified)
+	assert.Equal(t, record.VerifiedAt, decoded.VerifiedAt)
+	assert.Equal(t, record.VerificationComment, decoded.VerificationComment)
 	assert.Equal(t, record.SchemaVersion, decoded.SchemaVersion)
 }
 
@@ -77,6 +83,9 @@ func TestNewApprovalRecord(t *testing.T) {
 	assert.Equal(t, 1, record.SchemaVersion)
 	assert.False(t, record.NotificationSent)
 	assert.False(t, record.OutcomeNotified)
+	assert.False(t, record.Verified)
+	assert.Equal(t, int64(0), record.VerifiedAt)
+	assert.Equal(t, "", record.VerificationComment)
 }
 
 func TestNewApprovalRecord_WithCollisions(t *testing.T) {

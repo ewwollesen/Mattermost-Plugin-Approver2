@@ -35,6 +35,11 @@ type ApprovalRecord struct {
 	CanceledReason string `json:"canceledReason,omitempty"` // Reason for cancellation
 	CanceledAt     int64  `json:"canceledAt,omitempty"`     // Timestamp when canceled
 
+	// Verification fields (v0.3.0+) - requester confirms action completion
+	Verified            bool   `json:"verified"`                      // Whether requester verified completion
+	VerifiedAt          int64  `json:"verifiedAt,omitempty"`          // Timestamp when verified (0 if not verified)
+	VerificationComment string `json:"verificationComment,omitempty"` // Optional comment from requester
+
 	// Context
 	RequestChannelID string `json:"requestChannelId"`
 	TeamID           string `json:"teamId,omitempty"`

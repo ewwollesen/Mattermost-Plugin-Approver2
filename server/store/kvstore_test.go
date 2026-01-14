@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"strings"
 	"testing"
 
 	"github.com/mattermost/mattermost-plugin-approver2/server/approval"
@@ -828,6 +829,179 @@ func TestKVStore_GetUserApprovals(t *testing.T) {
 		require.NoError(t, err)
 		assert.Len(t, records, 1)
 		assert.Equal(t, "A-GOOD", records[0].Code)
+		api.AssertExpectations(t)
+	})
+}
+
+// TestSaveApproval_VerificationUpdate tests that verification updates are allowed on approved records
+func TestSaveApproval_VerificationUpdate(t *testing.T) {
+	t.Run("allows verification update on approved record", func(t *testing.T) {
+		api := &plugintest.API{}
+		store := NewKVStore(api)
+
+		// Existing approved record (not verified)
+		existingRecord := &approval.ApprovalRecord{
+			ID:                   "record123",
+			Code:                 "A-X7K9Q2",
+			Status:               approval.StatusApproved,
+			RequesterID:          "user123",
+			RequesterUsername:    "alice",
+			RequesterDisplayName: "Alice Smith",
+			ApproverID:           "approver456",
+			ApproverUsername:     "bob",
+			ApproverDisplayName:  "Bob Jones",
+			Description:          "Test approval",
+			DecisionComment:      "Looks good",
+			CreatedAt:            1704931200000,
+			DecidedAt:            1704931300000,
+			Verified:             false,
+			VerifiedAt:           0,
+			VerificationComment:  "",
+			SchemaVersion:        1,
+		}
+
+		existingRecordJSON, _ := json.Marshal(existingRecord)
+
+		// Updated record with verification
+		updatedRecord := *existingRecord
+		updatedRecord.Verified = true
+		updatedRecord.VerifiedAt = 1704931400000
+		updatedRecord.VerificationComment = "Deployment completed"
+
+		// Mock KVGet for existing record
+		api.On("KVGet", "approval:record:record123").Return(existingRecordJSON, nil).Once()
+
+		// Mock KVSet for updated record
+		api.On("KVSet", "approval:record:record123", mock.Anything).Return(nil).Once()
+		api.On("KVSet", "approval:code:A-X7K9Q2", mock.Anything).Return(nil).Once()
+		api.On("KVSet", mock.MatchedBy(func(key string) bool {
+			return strings.HasPrefix(key, "approval:index:requester:")
+		}), mock.Anything).Return(nil).Once()
+		api.On("KVSet", mock.MatchedBy(func(key string) bool {
+			return strings.HasPrefix(key, "approval:index:approver:")
+		}), mock.Anything).Return(nil).Once()
+
+		err := store.SaveApproval(&updatedRecord)
+		assert.NoError(t, err)
+		api.AssertExpectations(t)
+	})
+
+	t.Run("rejects verification update on already verified record", func(t *testing.T) {
+		api := &plugintest.API{}
+		store := NewKVStore(api)
+
+		// Existing approved record (already verified)
+		existingRecord := &approval.ApprovalRecord{
+			ID:                   "record123",
+			Code:                 "A-X7K9Q2",
+			Status:               approval.StatusApproved,
+			RequesterID:          "user123",
+			RequesterUsername:    "alice",
+			RequesterDisplayName: "Alice Smith",
+			ApproverID:           "approver456",
+			ApproverUsername:     "bob",
+			ApproverDisplayName:  "Bob Jones",
+			Description:          "Test approval",
+			DecisionComment:      "Looks good",
+			CreatedAt:            1704931200000,
+			DecidedAt:            1704931300000,
+			Verified:             true,
+			VerifiedAt:           1704931400000,
+			VerificationComment:  "Already verified",
+			SchemaVersion:        1,
+		}
+
+		existingRecordJSON, _ := json.Marshal(existingRecord)
+
+		// Attempt to update verification comment
+		updatedRecord := *existingRecord
+		updatedRecord.VerificationComment = "Different comment"
+
+		// Mock KVGet for existing record
+		api.On("KVGet", "approval:record:record123").Return(existingRecordJSON, nil).Once()
+
+		err := store.SaveApproval(&updatedRecord)
+		assert.Error(t, err)
+		assert.Contains(t, err.Error(), "approval record is immutable")
+		api.AssertExpectations(t)
+	})
+
+	t.Run("rejects verification on denied record", func(t *testing.T) {
+		api := &plugintest.API{}
+		store := NewKVStore(api)
+
+		// Existing denied record
+		existingRecord := &approval.ApprovalRecord{
+			ID:                   "record123",
+			Code:                 "A-X7K9Q2",
+			Status:               approval.StatusDenied,
+			RequesterID:          "user123",
+			RequesterUsername:    "alice",
+			RequesterDisplayName: "Alice Smith",
+			ApproverID:           "approver456",
+			ApproverUsername:     "bob",
+			ApproverDisplayName:  "Bob Jones",
+			Description:          "Test approval",
+			DecisionComment:      "Not approved",
+			CreatedAt:            1704931200000,
+			DecidedAt:            1704931300000,
+			Verified:             false,
+			SchemaVersion:        1,
+		}
+
+		existingRecordJSON, _ := json.Marshal(existingRecord)
+
+		// Attempt to verify denied record
+		updatedRecord := *existingRecord
+		updatedRecord.Verified = true
+		updatedRecord.VerifiedAt = 1704931400000
+
+		// Mock KVGet for existing record
+		api.On("KVGet", "approval:record:record123").Return(existingRecordJSON, nil).Once()
+
+		err := store.SaveApproval(&updatedRecord)
+		assert.Error(t, err)
+		assert.Contains(t, err.Error(), "approval record is immutable")
+		api.AssertExpectations(t)
+	})
+
+	t.Run("rejects changes to core fields during verification", func(t *testing.T) {
+		api := &plugintest.API{}
+		store := NewKVStore(api)
+
+		// Existing approved record
+		existingRecord := &approval.ApprovalRecord{
+			ID:                   "record123",
+			Code:                 "A-X7K9Q2",
+			Status:               approval.StatusApproved,
+			RequesterID:          "user123",
+			RequesterUsername:    "alice",
+			RequesterDisplayName: "Alice Smith",
+			ApproverID:           "approver456",
+			ApproverUsername:     "bob",
+			ApproverDisplayName:  "Bob Jones",
+			Description:          "Test approval",
+			DecisionComment:      "Looks good",
+			CreatedAt:            1704931200000,
+			DecidedAt:            1704931300000,
+			Verified:             false,
+			SchemaVersion:        1,
+		}
+
+		existingRecordJSON, _ := json.Marshal(existingRecord)
+
+		// Attempt to verify AND change decision comment (not allowed)
+		updatedRecord := *existingRecord
+		updatedRecord.Verified = true
+		updatedRecord.VerifiedAt = 1704931400000
+		updatedRecord.DecisionComment = "Changed comment" // Immutable field changed
+
+		// Mock KVGet for existing record
+		api.On("KVGet", "approval:record:record123").Return(existingRecordJSON, nil).Once()
+
+		err := store.SaveApproval(&updatedRecord)
+		assert.Error(t, err)
+		assert.Contains(t, err.Error(), "approval record is immutable")
 		api.AssertExpectations(t)
 	})
 }

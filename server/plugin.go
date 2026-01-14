@@ -7,7 +7,9 @@ import (
 
 	"github.com/mattermost/mattermost-plugin-approver2/server/approval"
 	"github.com/mattermost/mattermost-plugin-approver2/server/command"
+	"github.com/mattermost/mattermost-plugin-approver2/server/notifications"
 	"github.com/mattermost/mattermost-plugin-approver2/server/store"
+	"github.com/mattermost/mattermost-plugin-approver2/server/timeout"
 	"github.com/mattermost/mattermost/server/public/model"
 	"github.com/mattermost/mattermost/server/public/plugin"
 )
@@ -28,6 +30,9 @@ type Plugin struct {
 
 	// service provides approval business logic
 	service *approval.Service
+
+	// timeoutChecker periodically scans for timed-out pending requests
+	timeoutChecker *timeout.TimeoutChecker
 
 	// botUserID is the ID of the bot user for sending notifications
 	botUserID string
@@ -54,6 +59,10 @@ func (p *Plugin) OnActivate() error {
 	// Initialize approval service
 	p.service = approval.NewService(p.store, p.API, botID)
 
+	// Initialize and start timeout checker (Story 6.1)
+	p.timeoutChecker = timeout.NewChecker(p.store, p.service, p.API, botID)
+	p.timeoutChecker.Start()
+
 	// Register slash command
 	if err := p.registerCommand(); err != nil {
 		return fmt.Errorf("failed to register slash command: %w", err)
@@ -63,13 +72,26 @@ func (p *Plugin) OnActivate() error {
 	return nil
 }
 
+// OnDeactivate is called when the plugin is deactivated.
+func (p *Plugin) OnDeactivate() error {
+	p.API.LogInfo("Deactivating Mattermost Approval Workflow plugin")
+
+	// Stop timeout checker gracefully (Story 6.1)
+	if p.timeoutChecker != nil {
+		p.timeoutChecker.Stop()
+	}
+
+	p.API.LogInfo("Mattermost Approval Workflow plugin deactivated successfully")
+	return nil
+}
+
 // registerCommand registers the /approve slash command
 func (p *Plugin) registerCommand() error {
 	cmd := &model.Command{
 		Trigger:          "approve",
 		AutoComplete:     true,
 		AutoCompleteDesc: "Manage approval requests",
-		AutoCompleteHint: "[new|list [pending|approved|denied|canceled|all]|get|cancel|status|help]",
+		AutoCompleteHint: "[new|list [pending|approved|denied|canceled|all]|get|cancel|verify|status|help]",
 		DisplayName:      "Approval Request",
 		Description:      "Create, manage, and view approval requests",
 	}
@@ -97,6 +119,11 @@ func (p *Plugin) ExecuteCommand(c *plugin.Context, args *model.CommandArgs) (*mo
 	// Handle cancel command directly (bypass router for direct commands)
 	if subcommand == "cancel" {
 		return p.handleCancelCommand(args, split), nil
+	}
+
+	// Handle verify command directly (Story 6.2)
+	if subcommand == "verify" {
+		return p.handleVerifyCommand(args, split), nil
 	}
 
 	// For other commands, use the router
@@ -259,6 +286,148 @@ func (p *Plugin) formatCancelError(err error, code string) string {
 		}
 	default:
 		return "❌ Failed to cancel approval request. Please try again."
+	}
+}
+
+// handleVerifyCommand processes the /approve verify <CODE> [comment] command
+// Story 6.2: Allows requester to mark approved requests as verified
+func (p *Plugin) handleVerifyCommand(args *model.CommandArgs, split []string) *model.CommandResponse {
+	// Validate command format: /approve verify <CODE> [comment]
+	if len(split) < 3 {
+		return &model.CommandResponse{
+			ResponseType: model.CommandResponseTypeEphemeral,
+			Text:         "Usage: /approve verify <APPROVAL_CODE> [comment]\n\nExample: `/approve verify A-X7K9Q2` or `/approve verify A-X7K9Q2 Deployment completed successfully`",
+		}
+	}
+
+	approvalCode := split[2]
+	requesterID := args.UserId
+
+	// Extract optional comment (everything after the code)
+	comment := ""
+	if len(split) > 3 {
+		comment = strings.Join(split[3:], " ")
+	}
+
+	// Validate comment length (AC7: max 500 characters)
+	if len(comment) > 500 {
+		return &model.CommandResponse{
+			ResponseType: model.CommandResponseTypeEphemeral,
+			Text:         fmt.Sprintf("❌ Verification comment too long (%d characters). Maximum length is 500 characters.", len(comment)),
+		}
+	}
+
+	// Validate approval exists and get record
+	record, err := p.store.GetByCode(approvalCode)
+	if err != nil {
+		p.API.LogError("Failed to get approval record for verification",
+			"error", err.Error(),
+			"approval_code", approvalCode,
+			"user_id", requesterID,
+		)
+
+		errorMsg := p.formatVerifyError(err, approvalCode)
+		return &model.CommandResponse{
+			ResponseType: model.CommandResponseTypeEphemeral,
+			Text:         errorMsg,
+		}
+	}
+
+	// Verify user is the requester (AC4: permission check)
+	if record.RequesterID != requesterID {
+		p.API.LogError("Unauthorized verification attempt",
+			"approval_code", approvalCode,
+			"authenticated_user", requesterID,
+			"requester_id", record.RequesterID,
+		)
+		return &model.CommandResponse{
+			ResponseType: model.CommandResponseTypeEphemeral,
+			Text:         "❌ Permission denied. Only the requester can verify their approval requests.",
+		}
+	}
+
+	// Verify status is approved (AC5)
+	if record.Status != approval.StatusApproved {
+		return &model.CommandResponse{
+			ResponseType: model.CommandResponseTypeEphemeral,
+			Text:         fmt.Sprintf("❌ Cannot verify approval request %s. Only approved requests can be verified (current status: %s).", approvalCode, record.Status),
+		}
+	}
+
+	// Verify not already verified (AC6)
+	if record.Verified {
+		return &model.CommandResponse{
+			ResponseType: model.CommandResponseTypeEphemeral,
+			Text:         fmt.Sprintf("❌ Approval request %s has already been verified.", approvalCode),
+		}
+	}
+
+	// Call service to verify request (updates record)
+	if err := p.service.VerifyRequest(approvalCode, requesterID, comment); err != nil {
+		p.API.LogError("Failed to verify approval request",
+			"error", err.Error(),
+			"approval_code", approvalCode,
+			"user_id", requesterID,
+		)
+
+		errorMsg := p.formatVerifyError(err, approvalCode)
+		return &model.CommandResponse{
+			ResponseType: model.CommandResponseTypeEphemeral,
+			Text:         errorMsg,
+		}
+	}
+
+	// Reload record to get updated verification fields
+	updatedRecord, err := p.store.GetByCode(approvalCode)
+	if err != nil {
+		p.API.LogError("Failed to reload verified record for notification",
+			"approval_code", approvalCode,
+			"error", err.Error(),
+		)
+		// Continue - notification failure doesn't block success response
+	} else {
+		// Send verification notification to approver (best-effort, graceful degradation)
+		if _, err := notifications.SendVerificationNotificationDM(p.API, p.botUserID, updatedRecord); err != nil {
+			p.API.LogWarn("Failed to send verification notification",
+				"approval_code", approvalCode,
+				"approver_id", record.ApproverID,
+				"error", err.Error(),
+			)
+			// Continue - notification failure doesn't affect verification
+		}
+	}
+
+	// Success response
+	successMsg := fmt.Sprintf("✅ Approval request **%s** marked as verified.", approvalCode)
+	if comment != "" {
+		successMsg += fmt.Sprintf("\n\n**Verification note:** %s", comment)
+	}
+	successMsg += fmt.Sprintf("\n\n%s has been notified.", record.ApproverDisplayName)
+
+	return &model.CommandResponse{
+		ResponseType: model.CommandResponseTypeEphemeral,
+		Text:         successMsg,
+	}
+}
+
+// formatVerifyError converts service errors into user-friendly messages for verify command
+func (p *Plugin) formatVerifyError(err error, code string) string {
+	errorStr := err.Error()
+
+	// Check for specific error types
+	switch {
+	case strings.Contains(errorStr, "invalid approval code format"):
+		return fmt.Sprintf("❌ Invalid approval code format: '%s'. Expected format like 'A-X7K9Q2'.", code)
+	case strings.Contains(errorStr, "approval record not found"):
+		return fmt.Sprintf("❌ Approval request '%s' not found. Use `/approve list` to see your requests.", code)
+	case strings.Contains(errorStr, "permission denied"):
+		return "❌ Permission denied. Only the requester can verify their approval requests."
+	case strings.Contains(errorStr, "not approved"):
+		return fmt.Sprintf("❌ Cannot verify approval request %s. Only approved requests can be verified.", code)
+	case strings.Contains(errorStr, "already verified"):
+		return fmt.Sprintf("❌ Approval request %s has already been verified.", code)
+	default:
+		return "❌ Failed to verify approval request. Please try again."
 	}
 }
 

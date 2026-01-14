@@ -100,6 +100,158 @@ func (s *Service) CancelApproval(approvalCode, requesterID, reason string) error
 	return nil
 }
 
+// CancelApprovalByID cancels a pending approval request by ID with a reason.
+// This method is used by the timeout checker for auto-cancellation.
+//
+// Parameters:
+// - approvalID: The full 26-character approval record ID
+// - requesterID: The user ID of the requester (for auto-cancel, pass record's RequesterID)
+// - isAutoCancel: If true, sets auto-cancel reason; if false, uses provided reason
+//
+// Returns:
+// - ErrRecordNotFound if approval doesn't exist
+// - ErrRecordImmutable if approval is not pending (handles race conditions)
+// - error if validation fails
+func (s *Service) CancelApprovalByID(approvalID, requesterID string, isAutoCancel bool) error {
+	// Validation: ID and requester ID required (trim whitespace)
+	approvalID = strings.TrimSpace(approvalID)
+	if approvalID == "" {
+		return fmt.Errorf("approval ID is required")
+	}
+
+	requesterID = strings.TrimSpace(requesterID)
+	if requesterID == "" {
+		return fmt.Errorf("requester ID is required")
+	}
+
+	// Retrieve approval record by ID
+	record, err := s.store.GetApproval(approvalID)
+	if err != nil {
+		// Wrap ErrRecordNotFound with context
+		return fmt.Errorf("failed to retrieve approval %s: %w", approvalID, err)
+	}
+
+	// Immutability check: only pending approvals can be canceled
+	// This handles race conditions where an approver makes a decision
+	// at the same time as the timeout checker attempts to cancel
+	if record.Status != StatusPending {
+		return fmt.Errorf("cannot cancel approval with status %s: %w", record.Status, ErrRecordImmutable)
+	}
+
+	// Determine cancellation reason
+	var reason string
+	if isAutoCancel {
+		reason = "Auto-canceled: No response within 30 minutes"
+	} else {
+		return fmt.Errorf("manual cancellation via CancelApprovalByID not supported, use CancelApproval instead")
+	}
+
+	// Update record status, reason, and timestamps
+	now := model.GetMillis()
+	record.Status = StatusCanceled
+	record.CanceledReason = reason
+	record.CanceledAt = now
+	record.DecidedAt = now // Keep for backwards compatibility
+
+	// Persist updated record (KV store enforces immutability)
+	if err := s.store.SaveApproval(record); err != nil {
+		return fmt.Errorf("failed to save canceled approval %s: %w", approvalID, err)
+	}
+
+	s.api.LogInfo("Approval canceled",
+		"approval_id", approvalID,
+		"code", record.Code,
+		"is_auto_cancel", isAutoCancel,
+		"reason", reason,
+	)
+
+	// Send timeout notification to requester (best-effort, graceful degradation)
+	// Only send for auto-cancel; manual cancellations use different notification flow
+	if isAutoCancel {
+		// Import notifications package at top of file
+		// For now, we'll return without notification - caller (timeout checker) will handle notification
+		// This keeps the service layer focused on business logic
+	}
+
+	return nil
+}
+
+// VerifyRequest marks an approved request as verified by the requester
+// Story 6.2: Allows requester to confirm that approved action has been completed
+//
+// Parameters:
+// - approvalCode: The human-friendly approval code (e.g., "A-X7K9Q2")
+// - requesterID: The user ID of the requester
+// - comment: Optional verification comment from requester (max 500 chars)
+//
+// Returns:
+// - ErrRecordNotFound if approval doesn't exist
+// - error with "not approved" if status is not approved
+// - error with "already verified" if already marked as verified
+// - error with "permission denied" if requester doesn't match
+func (s *Service) VerifyRequest(approvalCode, requesterID, comment string) error {
+	// Validation: code and requester ID required (trim whitespace)
+	approvalCode = strings.TrimSpace(approvalCode)
+	if approvalCode == "" {
+		return fmt.Errorf("approval code is required")
+	}
+
+	// Validate approval code format (A-X7K9Q2)
+	if !approvalCodePattern.MatchString(approvalCode) {
+		return fmt.Errorf("invalid approval code format: expected format like 'A-X7K9Q2'")
+	}
+
+	requesterID = strings.TrimSpace(requesterID)
+	if requesterID == "" {
+		return fmt.Errorf("requester ID is required")
+	}
+
+	// Trim comment (optional, can be empty)
+	comment = strings.TrimSpace(comment)
+
+	// Retrieve approval record by code
+	record, err := s.store.GetByCode(approvalCode)
+	if err != nil {
+		// Wrap ErrRecordNotFound with context
+		return fmt.Errorf("failed to retrieve approval %s: %w", approvalCode, err)
+	}
+
+	// Access control: verify requester is the owner
+	if record.RequesterID != requesterID {
+		return fmt.Errorf("permission denied: only requester can verify approval")
+	}
+
+	// Validate status is approved (only approved requests can be verified)
+	if record.Status != StatusApproved {
+		return fmt.Errorf("cannot verify approval with status %s: not approved", record.Status)
+	}
+
+	// Check if already verified (one-time operation)
+	if record.Verified {
+		return fmt.Errorf("approval %s already verified", approvalCode)
+	}
+
+	// Update record: mark as verified with timestamp and optional comment
+	now := model.GetMillis()
+	record.Verified = true
+	record.VerifiedAt = now
+	record.VerificationComment = comment
+
+	// Persist updated record
+	if err := s.store.SaveApproval(record); err != nil {
+		return fmt.Errorf("failed to save verified approval %s: %w", approvalCode, err)
+	}
+
+	s.api.LogInfo("Approval verified",
+		"approval_id", record.ID,
+		"code", record.Code,
+		"requester_id", requesterID,
+		"has_comment", comment != "",
+	)
+
+	return nil
+}
+
 // RecordDecision records an approval decision (approve or deny) with immutability guarantees.
 // This method enforces:
 // - Authorization: Only the designated approver can record a decision

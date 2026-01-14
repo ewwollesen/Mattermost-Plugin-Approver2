@@ -2168,3 +2168,130 @@ func TestFormatListResponse_UTF8Handling(t *testing.T) {
 		})
 	}
 }
+
+// TestFormatRecordDetail_Verification tests that verification information is displayed correctly
+func TestFormatRecordDetail_Verification(t *testing.T) {
+	t.Run("shows verification section for verified approved request without comment", func(t *testing.T) {
+		record := &approval.ApprovalRecord{
+			ID:                   "record123",
+			Code:                 "A-X7K9Q2",
+			Status:               approval.StatusApproved,
+			RequesterID:          "user123",
+			RequesterUsername:    "alice",
+			RequesterDisplayName: "Alice Smith",
+			ApproverID:           "approver456",
+			ApproverUsername:     "bob",
+			ApproverDisplayName:  "Bob Jones",
+			Description:          "Deploy to production",
+			CreatedAt:            1704931200000,
+			DecidedAt:            1704931300000,
+			Verified:             true,
+			VerifiedAt:           1704931400000, // Jan 10, 2024
+			VerificationComment:  "",
+		}
+
+		result := formatRecordDetail(record)
+
+		// Verify section header
+		assert.Contains(t, result, "**✅ Verification:**")
+
+		// Verify timestamp is shown
+		assert.Contains(t, result, "**Verified:** 2024-01-11")
+
+		// Verify "Verified by" shows requester
+		assert.Contains(t, result, "**Verified by:** @alice")
+
+		// Verify no comment section since it's empty
+		assert.NotContains(t, result, "**Note:**")
+	})
+
+	t.Run("shows verification section for verified approved request with comment", func(t *testing.T) {
+		record := &approval.ApprovalRecord{
+			ID:                   "record123",
+			Code:                 "A-X7K9Q2",
+			Status:               approval.StatusApproved,
+			RequesterID:          "user123",
+			RequesterUsername:    "alice",
+			RequesterDisplayName: "Alice Smith",
+			ApproverID:           "approver456",
+			ApproverUsername:     "bob",
+			ApproverDisplayName:  "Bob Jones",
+			Description:          "Deploy to production",
+			CreatedAt:            1704931200000,
+			DecidedAt:            1704931300000,
+			Verified:             true,
+			VerifiedAt:           1704931400000,
+			VerificationComment:  "Deployment completed successfully",
+		}
+
+		result := formatRecordDetail(record)
+
+		// Verify section header
+		assert.Contains(t, result, "**✅ Verification:**")
+
+		// Verify timestamp is shown
+		assert.Contains(t, result, "**Verified:** 2024-01-11")
+
+		// Verify "Verified by" shows requester
+		assert.Contains(t, result, "**Verified by:** @alice")
+
+		// Verify comment is shown
+		assert.Contains(t, result, "**Note:** Deployment completed successfully")
+	})
+
+	t.Run("no verification section for approved request not verified", func(t *testing.T) {
+		record := &approval.ApprovalRecord{
+			ID:                   "record123",
+			Code:                 "A-X7K9Q2",
+			Status:               approval.StatusApproved,
+			RequesterID:          "user123",
+			RequesterUsername:    "alice",
+			RequesterDisplayName: "Alice Smith",
+			ApproverID:           "approver456",
+			ApproverUsername:     "bob",
+			ApproverDisplayName:  "Bob Jones",
+			Description:          "Deploy to production",
+			CreatedAt:            1704931200000,
+			DecidedAt:            1704931300000,
+			Verified:             false,
+		}
+
+		result := formatRecordDetail(record)
+
+		// Verification section should NOT be shown
+		assert.NotContains(t, result, "**✅ Verification:**")
+		assert.NotContains(t, result, "**Verified by:**")
+	})
+
+	t.Run("no verification section for non-approved statuses", func(t *testing.T) {
+		statuses := []string{
+			approval.StatusPending,
+			approval.StatusDenied,
+			approval.StatusCanceled,
+		}
+
+		for _, status := range statuses {
+			record := &approval.ApprovalRecord{
+				ID:                   "record123",
+				Code:                 "A-X7K9Q2",
+				Status:               status,
+				RequesterID:          "user123",
+				RequesterUsername:    "alice",
+				RequesterDisplayName: "Alice Smith",
+				ApproverID:           "approver456",
+				ApproverUsername:     "bob",
+				ApproverDisplayName:  "Bob Jones",
+				Description:          "Deploy to production",
+				CreatedAt:            1704931200000,
+				Verified:             true, // Even if verified flag is true
+				VerifiedAt:           1704931400000,
+			}
+
+			result := formatRecordDetail(record)
+
+			// Verification section should NOT be shown for non-approved status
+			assert.NotContains(t, result, "**✅ Verification:**",
+				"Status %s should not show verification section", status)
+		}
+	})
+}
