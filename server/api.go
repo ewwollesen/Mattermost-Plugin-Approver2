@@ -745,11 +745,15 @@ func (p *Plugin) handleCancelModalSubmission(payload *model.SubmitDialogRequest)
 		// Send cancellation notification DM to approver (Story 4.2)
 		_, err = notifications.SendCancellationNotificationDM(p.API, p.botUserID, updatedRecord, requester.Username)
 		if err != nil {
+			errorType, suggestion := notifications.ClassifyDMError(err)
 			p.API.LogWarn("Failed to send cancellation notification to approver",
 				"error", err.Error(),
-				"approval_id", updatedRecord.ID,
+				"error_type", errorType,
+				"suggestion", suggestion,
+				"approval_code", updatedRecord.Code,
 				"approver_id", updatedRecord.ApproverID,
 			)
+			// Continue - cancellation already recorded, notification is best-effort
 		}
 
 		// Send cancellation notification DM to requestor (Story 7.1)

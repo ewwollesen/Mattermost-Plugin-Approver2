@@ -355,7 +355,7 @@ func SendTimeoutNotificationDM(api plugin.API, botUserID string, record *approva
 }
 
 // SendRequesterCancellationNotificationDM sends a DM notification to the requestor when their approval request is canceled by an approver.
-// Story 7.1: Completes the feedback loop by notifying requestors of cancellation.
+// Epic 7: 1.0 Polish & UX Improvements, Story 7.1: Completes the feedback loop by notifying requestors of cancellation.
 //
 // IMPORTANT: This function implements graceful degradation (Architecture Decision 2.2). The caller MUST NOT
 // fail the cancellation operation if this notification fails - it is best-effort only. The cancellation has
@@ -370,6 +370,12 @@ func SendRequesterCancellationNotificationDM(api plugin.API, botUserID string, r
 	}
 	if record == nil {
 		return "", fmt.Errorf("approval record is nil")
+	}
+	if record.ID == "" {
+		return "", fmt.Errorf("approval record ID is empty")
+	}
+	if record.RequesterID == "" {
+		return "", fmt.Errorf("requester ID is empty")
 	}
 
 	// Get or create DM channel with requestor

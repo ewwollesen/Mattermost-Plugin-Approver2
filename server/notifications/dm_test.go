@@ -1783,8 +1783,9 @@ func TestSendRequesterCancellationNotificationDM(t *testing.T) {
 		// Assert
 		assert.NoError(t, err)
 		assert.Equal(t, "notification_post_123", postID)
-		// Timestamp should be formatted in UTC
+		// Timestamp should be formatted in UTC with full format
 		assert.Contains(t, capturedMessage, "Jan 11, 2024")
+		assert.Contains(t, capturedMessage, "12:01 AM")
 		api.AssertExpectations(t)
 	})
 
@@ -1912,6 +1913,92 @@ func TestSendRequesterCancellationNotificationDM(t *testing.T) {
 				api.AssertExpectations(t)
 			})
 		}
+	})
+
+	t.Run("zero CanceledAt timestamp", func(t *testing.T) {
+		api := &plugintest.API{}
+		botUserID := "bot123"
+		requesterID := "user123"
+		dmChannelID := "dm789"
+
+		api.On("GetDirectChannel", botUserID, requesterID).Return(&model.Channel{Id: dmChannelID}, nil)
+		api.On("CreatePost", mock.MatchedBy(func(post *model.Post) bool {
+			// Should format zero timestamp as Jan 01, 1970
+			return strings.Contains(post.Message, "Jan 01, 1970")
+		})).Return(&model.Post{Id: "post123"}, nil)
+
+		record := &approval.ApprovalRecord{
+			ID:               "record123",
+			Code:             "A-X7K9Q2",
+			Description:      "Test",
+			RequesterID:      requesterID,
+			ApproverUsername: "approver",
+			CanceledReason:   "Reason",
+			CanceledAt:       0, // Zero timestamp
+		}
+
+		postID, err := SendRequesterCancellationNotificationDM(api, botUserID, record)
+		assert.NoError(t, err)
+		assert.NotEmpty(t, postID)
+		api.AssertExpectations(t)
+	})
+
+	t.Run("empty record ID", func(t *testing.T) {
+		api := &plugintest.API{}
+		botUserID := "bot123"
+
+		record := &approval.ApprovalRecord{
+			ID:          "", // Empty ID
+			RequesterID: "user123",
+		}
+
+		postID, err := SendRequesterCancellationNotificationDM(api, botUserID, record)
+		assert.Error(t, err)
+		assert.Empty(t, postID)
+		assert.Contains(t, err.Error(), "approval record ID is empty")
+	})
+
+	t.Run("empty requester ID", func(t *testing.T) {
+		api := &plugintest.API{}
+		botUserID := "bot123"
+
+		record := &approval.ApprovalRecord{
+			ID:          "record123",
+			RequesterID: "", // Empty requester ID
+		}
+
+		postID, err := SendRequesterCancellationNotificationDM(api, botUserID, record)
+		assert.Error(t, err)
+		assert.Empty(t, postID)
+		assert.Contains(t, err.Error(), "requester ID is empty")
+	})
+
+	t.Run("empty optional fields still create valid message", func(t *testing.T) {
+		api := &plugintest.API{}
+		botUserID := "bot123"
+		requesterID := "user123"
+		dmChannelID := "dm789"
+
+		api.On("GetDirectChannel", botUserID, requesterID).Return(&model.Channel{Id: dmChannelID}, nil)
+		api.On("CreatePost", mock.MatchedBy(func(post *model.Post) bool {
+			// Message should still be created even with empty optional fields
+			return post.ChannelId == dmChannelID && post.UserId == botUserID
+		})).Return(&model.Post{Id: "post123"}, nil)
+
+		record := &approval.ApprovalRecord{
+			ID:               "record123",
+			Code:             "",             // Empty optional
+			Description:      "",             // Empty optional
+			RequesterID:      requesterID,
+			ApproverUsername: "",             // Empty optional
+			CanceledReason:   "",             // Empty optional
+			CanceledAt:       1704931300000,
+		}
+
+		postID, err := SendRequesterCancellationNotificationDM(api, botUserID, record)
+		assert.NoError(t, err)
+		assert.NotEmpty(t, postID)
+		api.AssertExpectations(t)
 	})
 }
 
