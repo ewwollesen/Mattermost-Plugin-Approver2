@@ -236,7 +236,7 @@ func TestCheckTimeoutsHappyPath(t *testing.T) {
 	originalPost := &model.Post{
 		Id:      "post123",
 		Message: "Original approval message",
-		Props:   model.StringInterface{"attachments": []interface{}{}},
+		Props:   model.StringInterface{},
 	}
 	mockAPI.On("GetPost", "post123").Return(originalPost, nil)
 
@@ -269,7 +269,7 @@ func TestCheckTimeoutsHappyPath(t *testing.T) {
 // - Record reload failure after cancellation
 
 // Helper function to marshal JSON for tests
-func mustMarshalJSON(t *testing.T, v interface{}) []byte {
+func mustMarshalJSON(t *testing.T, v any) []byte {
 	data, err := json.Marshal(v)
 	assert.NoError(t, err)
 	return data
