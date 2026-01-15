@@ -354,6 +354,67 @@ func SendTimeoutNotificationDM(api plugin.API, botUserID string, record *approva
 	return createdPost.Id, nil
 }
 
+// SendRequesterCancellationNotificationDM sends a DM notification to the requestor when their approval request is canceled by an approver.
+// Story 7.1: Completes the feedback loop by notifying requestors of cancellation.
+//
+// IMPORTANT: This function implements graceful degradation (Architecture Decision 2.2). The caller MUST NOT
+// fail the cancellation operation if this notification fails - it is best-effort only. The cancellation has
+// already been recorded in the KV store before this notification is sent.
+//
+// Returns the post ID on success, or error if DM send fails (e.g., DM channel creation failure, CreatePost failure).
+// The caller should log errors at WARN level with ClassifyDMError() and continue - notification failures are best-effort only.
+func SendRequesterCancellationNotificationDM(api plugin.API, botUserID string, record *approval.ApprovalRecord) (string, error) {
+	// Validate inputs
+	if botUserID == "" {
+		return "", fmt.Errorf("bot user ID not available")
+	}
+	if record == nil {
+		return "", fmt.Errorf("approval record is nil")
+	}
+
+	// Get or create DM channel with requestor
+	channelID, err := GetDMChannelID(api, botUserID, record.RequesterID)
+	if err != nil {
+		return "", fmt.Errorf("failed to get DM channel with requestor %s: %w", record.RequesterID, err)
+	}
+
+	// Format cancellation timestamp
+	cancelTime := time.UnixMilli(record.CanceledAt).UTC().Format("Jan 02, 2006 3:04 PM")
+
+	// Build notification message (requestor perspective)
+	message := fmt.Sprintf(`🚫 **Your Approval Request Was Canceled**
+
+**Request ID:** `+"`%s`"+`
+**Original Request:** %s
+**Approver:** @%s
+**Reason:** %s
+**Canceled:** %s
+
+---
+
+The approver has canceled this approval request. You may submit a new request if needed.`,
+		record.Code,
+		record.Description,
+		record.ApproverUsername,
+		record.CanceledReason,
+		cancelTime,
+	)
+
+	// Create DM post
+	post := &model.Post{
+		ChannelId: channelID,
+		UserId:    botUserID,
+		Message:   message,
+	}
+
+	createdPost, appErr := api.CreatePost(post)
+	if appErr != nil {
+		return "", fmt.Errorf("failed to send cancellation notification to requestor %s: %w", record.RequesterID, appErr)
+	}
+
+	return createdPost.Id, nil
+}
+
 // SendVerificationNotificationDM sends a DM notification to the approver when the requester marks an approved request as verified.
 // Story 6.2: Notifies approver that the requester has confirmed completion of the approved action.
 //

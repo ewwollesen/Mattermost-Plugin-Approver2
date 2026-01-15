@@ -742,14 +742,28 @@ func (p *Plugin) handleCancelModalSubmission(payload *model.SubmitDialogRequest)
 			)
 		}
 
-		// Send cancellation notification DM (Story 4.2)
+		// Send cancellation notification DM to approver (Story 4.2)
 		_, err = notifications.SendCancellationNotificationDM(p.API, p.botUserID, updatedRecord, requester.Username)
 		if err != nil {
-			p.API.LogWarn("Failed to send cancellation notification",
+			p.API.LogWarn("Failed to send cancellation notification to approver",
 				"error", err.Error(),
 				"approval_id", updatedRecord.ID,
 				"approver_id", updatedRecord.ApproverID,
 			)
+		}
+
+		// Send cancellation notification DM to requestor (Story 7.1)
+		_, err = notifications.SendRequesterCancellationNotificationDM(p.API, p.botUserID, updatedRecord)
+		if err != nil {
+			errorType, suggestion := notifications.ClassifyDMError(err)
+			p.API.LogWarn("Failed to send cancellation notification to requestor",
+				"error", err.Error(),
+				"error_type", errorType,
+				"suggestion", suggestion,
+				"approval_code", updatedRecord.Code,
+				"requester_id", updatedRecord.RequesterID,
+			)
+			// Continue - cancellation already recorded, notification is best-effort
 		}
 	}
 

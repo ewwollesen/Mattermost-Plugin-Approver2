@@ -1,6 +1,7 @@
 package notifications
 
 import (
+	"net/http"
 	"strings"
 	"testing"
 	"time"
@@ -1736,6 +1737,181 @@ func TestSendVerificationNotificationDM(t *testing.T) {
 		assert.Error(t, err)
 		assert.Contains(t, err.Error(), "failed to send verification notification")
 		api.AssertExpectations(t)
+	})
+}
+
+func TestSendRequesterCancellationNotificationDM(t *testing.T) {
+	t.Run("successful notification to requestor", func(t *testing.T) {
+		// Setup mock API
+		api := &plugintest.API{}
+		botUserID := "bot123"
+		requesterID := "user123"
+		dmChannelID := "dm789"
+
+		api.On("GetDirectChannel", botUserID, requesterID).Return(&model.Channel{Id: dmChannelID}, nil)
+
+		var capturedMessage string
+		api.On("CreatePost", mock.MatchedBy(func(post *model.Post) bool {
+			if post.UserId == botUserID && post.ChannelId == dmChannelID {
+				capturedMessage = post.Message
+				return strings.Contains(post.Message, "🚫 **Your Approval Request Was Canceled**") &&
+					strings.Contains(post.Message, "A-X7K9Q2") &&
+					strings.Contains(post.Message, "@janedoe") &&
+					strings.Contains(post.Message, "No longer needed") &&
+					strings.Contains(post.Message, "Deploy to production")
+			}
+			return false
+		})).Return(&model.Post{Id: "notification_post_123"}, nil)
+
+		// Create test approval record
+		record := &approval.ApprovalRecord{
+			ID:                "record123",
+			Code:              "A-X7K9Q2",
+			Description:       "Deploy to production",
+			RequesterID:       requesterID,
+			RequesterUsername: "johndoe",
+			ApproverID:        "approver456",
+			ApproverUsername:  "janedoe",
+			Status:            approval.StatusCanceled,
+			CanceledReason:    "No longer needed",
+			CanceledAt:        1704931300000, // Jan 10, 2024 12:15 PM UTC
+		}
+
+		// Execute
+		postID, err := SendRequesterCancellationNotificationDM(api, botUserID, record)
+
+		// Assert
+		assert.NoError(t, err)
+		assert.Equal(t, "notification_post_123", postID)
+		// Timestamp should be formatted in UTC
+		assert.Contains(t, capturedMessage, "Jan 11, 2024")
+		api.AssertExpectations(t)
+	})
+
+	t.Run("DM channel creation fails", func(t *testing.T) {
+		api := &plugintest.API{}
+		botUserID := "bot123"
+		requesterID := "user123"
+
+		api.On("GetDirectChannel", botUserID, requesterID).Return(
+			nil,
+			model.NewAppError("GetDirectChannel", "api.channel.create_direct_channel.internal_error", nil, "", http.StatusInternalServerError),
+		)
+
+		record := &approval.ApprovalRecord{
+			ID:          "record123",
+			RequesterID: requesterID,
+		}
+
+		// Execute
+		postID, err := SendRequesterCancellationNotificationDM(api, botUserID, record)
+
+		// Assert
+		assert.Error(t, err)
+		assert.Empty(t, postID)
+		assert.Contains(t, err.Error(), "failed to get DM channel")
+		api.AssertExpectations(t)
+	})
+
+	t.Run("post creation fails", func(t *testing.T) {
+		api := &plugintest.API{}
+		botUserID := "bot123"
+		requesterID := "user123"
+		dmChannelID := "dm789"
+
+		api.On("GetDirectChannel", botUserID, requesterID).Return(&model.Channel{Id: dmChannelID}, nil)
+		api.On("CreatePost", mock.Anything).Return(
+			nil,
+			model.NewAppError("CreatePost", "api.post.create_post.internal_error", nil, "", http.StatusInternalServerError),
+		)
+
+		record := &approval.ApprovalRecord{
+			ID:               "record123",
+			Code:             "A-X7K9Q2",
+			Description:      "Test request",
+			RequesterID:      requesterID,
+			ApproverUsername: "approver",
+			CanceledReason:   "Reason",
+			CanceledAt:       1704931300000,
+		}
+
+		// Execute
+		postID, err := SendRequesterCancellationNotificationDM(api, botUserID, record)
+
+		// Assert
+		assert.Error(t, err)
+		assert.Empty(t, postID)
+		assert.Contains(t, err.Error(), "failed to send cancellation notification to requestor")
+		api.AssertExpectations(t)
+	})
+
+	t.Run("empty bot user ID", func(t *testing.T) {
+		api := &plugintest.API{}
+		record := &approval.ApprovalRecord{
+			ID:          "record123",
+			RequesterID: "user123",
+		}
+
+		// Execute
+		postID, err := SendRequesterCancellationNotificationDM(api, "", record)
+
+		// Assert
+		assert.Error(t, err)
+		assert.Empty(t, postID)
+		assert.Contains(t, err.Error(), "bot user ID not available")
+	})
+
+	t.Run("nil record", func(t *testing.T) {
+		api := &plugintest.API{}
+		botUserID := "bot123"
+
+		// Execute
+		postID, err := SendRequesterCancellationNotificationDM(api, botUserID, nil)
+
+		// Assert
+		assert.Error(t, err)
+		assert.Empty(t, postID)
+		assert.Contains(t, err.Error(), "approval record is nil")
+	})
+
+	t.Run("all cancellation reasons", func(t *testing.T) {
+		reasons := []string{
+			"Approved/denied elsewhere",
+			"Wrong approver selected",
+			"Mistake - no longer needed",
+			"Sensitive information - needs private discussion",
+			"Duplicate request",
+			"Other: Changed requirements",
+		}
+
+		for _, reason := range reasons {
+			t.Run(reason, func(t *testing.T) {
+				api := &plugintest.API{}
+				botUserID := "bot123"
+				requesterID := "user123"
+				dmChannelID := "dm789"
+
+				api.On("GetDirectChannel", botUserID, requesterID).Return(&model.Channel{Id: dmChannelID}, nil)
+				api.On("CreatePost", mock.MatchedBy(func(post *model.Post) bool {
+					return strings.Contains(post.Message, reason)
+				})).Return(&model.Post{Id: "post123"}, nil)
+
+				record := &approval.ApprovalRecord{
+					ID:               "record123",
+					Code:             "A-X7K9Q2",
+					Description:      "Test",
+					RequesterID:      requesterID,
+					ApproverUsername: "approver",
+					CanceledReason:   reason,
+					CanceledAt:       1704931300000,
+				}
+
+				postID, err := SendRequesterCancellationNotificationDM(api, botUserID, record)
+				assert.NoError(t, err)
+				assert.NotEmpty(t, postID)
+				api.AssertExpectations(t)
+			})
+		}
 	})
 }
 
