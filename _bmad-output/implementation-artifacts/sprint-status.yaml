@@ -94,10 +94,10 @@ development_status:
   epic-6-retrospective: optional
 
   # Epic 7: 1.0 Polish & UX Improvements
-  epic-7: in-progress
+  epic-7: done
   7-1-fix-cancellation-notification-to-requestor: done
   7-2-fix-cicd-build-failures-on-tag-push: done
   7-3-fix-additional-details-box-behavior-in-cancel-dialog: done
   7-4-add-autocomplete-for-slash-command-arguments: done
-  7-5-convert-approve-list-output-to-markdown-table: review
+  7-5-convert-approve-list-output-to-markdown-table: done
   epic-7-retrospective: optional
