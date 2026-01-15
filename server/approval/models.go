@@ -32,8 +32,9 @@ type ApprovalRecord struct {
 	DecidedAt int64 `json:"decidedAt"` // 0 if pending
 
 	// Cancellation fields (v0.2.0+)
-	CanceledReason string `json:"canceledReason,omitempty"` // Reason for cancellation
-	CanceledAt     int64  `json:"canceledAt,omitempty"`     // Timestamp when canceled
+	CanceledReason  string `json:"canceledReason,omitempty"`  // Reason for cancellation
+	CanceledDetails string `json:"canceledDetails,omitempty"` // Additional context (optional, Story 7.3)
+	CanceledAt      int64  `json:"canceledAt,omitempty"`      // Timestamp when canceled
 
 	// Verification fields (v0.3.0+) - requester confirms action completion
 	Verified            bool   `json:"verified"`                      // Whether requester verified completion

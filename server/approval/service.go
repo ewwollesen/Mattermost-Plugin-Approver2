@@ -40,12 +40,13 @@ func NewService(store ApprovalStore, api plugin.API, botUserID string) *Service 
 // - approvalCode: The human-friendly approval code (e.g., "A-X7K9Q2")
 // - requesterID: The user ID of the requester
 // - reason: The reason for cancellation (required)
+// - details: Additional context/explanation (optional, Story 7.3)
 // Returns:
 // - ErrRecordNotFound if approval doesn't exist
 // - ErrRecordImmutable if approval is not pending
 // - error with "permission denied" if requester doesn't match
 // - error if reason is empty
-func (s *Service) CancelApproval(approvalCode, requesterID, reason string) error {
+func (s *Service) CancelApproval(approvalCode, requesterID, reason, details string) error {
 	// Validation: code and requester ID required (trim whitespace)
 	approvalCode = strings.TrimSpace(approvalCode)
 	if approvalCode == "" {
@@ -85,10 +86,11 @@ func (s *Service) CancelApproval(approvalCode, requesterID, reason string) error
 		return fmt.Errorf("cannot cancel approval with status %s: %w", record.Status, ErrRecordImmutable)
 	}
 
-	// Update record status, reason, and timestamps
+	// Update record status, reason, details, and timestamps (Story 7.3)
 	now := model.GetMillis()
 	record.Status = StatusCanceled
 	record.CanceledReason = reason
+	record.CanceledDetails = strings.TrimSpace(details) // Optional additional context
 	record.CanceledAt = now
 	record.DecidedAt = now // Keep for backwards compatibility
 

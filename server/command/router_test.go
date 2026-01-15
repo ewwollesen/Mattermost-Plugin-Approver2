@@ -555,19 +555,30 @@ func TestExecuteList(t *testing.T) {
 		// Mock store to return empty slice
 		store.On("GetUserApprovals", "user123").Return([]*approval.ApprovalRecord{}, nil)
 
+		// Story 7.5: Mock SendEphemeralPost to capture the message
+		var capturedPost *model.Post
+		api.On("SendEphemeralPost", "user123", mock.MatchedBy(func(post *model.Post) bool {
+			capturedPost = post
+			return true
+		})).Return(&model.Post{})
+
 		args := &model.CommandArgs{
-			Command: "/approve list",
-			UserId:  "user123",
+			Command:   "/approve list",
+			UserId:    "user123",
+			ChannelId: "channel123",
 		}
 
 		resp, err := router.Route(args)
 		assert.NoError(t, err)
 		assert.NotNil(t, resp)
-		assert.Equal(t, model.CommandResponseTypeEphemeral, resp.ResponseType)
-		// Story 5.2: Filter-specific empty state message
-		assert.Contains(t, resp.Text, "No pending approval requests")
-		assert.Contains(t, resp.Text, "/approve list all")
 
+		// Verify the message was sent via ephemeral post
+		assert.NotNil(t, capturedPost)
+		// Story 5.2: Filter-specific empty state message
+		assert.Contains(t, capturedPost.Message, "No pending approval requests")
+		assert.Contains(t, capturedPost.Message, "/approve list all")
+
+		api.AssertExpectations(t)
 		store.AssertExpectations(t)
 	})
 
@@ -590,22 +601,37 @@ func TestExecuteList(t *testing.T) {
 		}
 		store.On("GetUserApprovals", "user123").Return(records, nil)
 
+		// Story 7.5: Mock SendEphemeralPost to capture the message
+		var capturedPost *model.Post
+		api.On("SendEphemeralPost", "user123", mock.MatchedBy(func(post *model.Post) bool {
+			capturedPost = post
+			return true
+		})).Return(&model.Post{})
+
 		args := &model.CommandArgs{
-			Command: "/approve list",
-			UserId:  "user123",
+			Command:   "/approve list",
+			UserId:    "user123",
+			ChannelId: "channel123",
 		}
 
 		resp, err := router.Route(args)
 		assert.NoError(t, err)
 		assert.NotNil(t, resp)
-		// Story 5.2: New header format with count
-		assert.Contains(t, resp.Text, "## Your Approval Requests (1 pending)")
-		assert.Contains(t, resp.Text, "**A-ABC123**")
-		assert.Contains(t, resp.Text, "⏳ Pending")
-		assert.Contains(t, resp.Text, "@alice")
-		assert.Contains(t, resp.Text, "@bob")
-		assert.Contains(t, resp.Text, "2024-01-11")
 
+		// Verify the message was sent via ephemeral post
+		assert.NotNil(t, capturedPost)
+		// Story 5.2: New header format with count
+		assert.Contains(t, capturedPost.Message, "## Your Approval Requests (1 pending)")
+		// Story 7.5: Markdown table format
+		assert.Contains(t, capturedPost.Message, "| Code | Status | Requestor | Approver | Created |")
+		assert.Contains(t, capturedPost.Message, "|------|--------|-----------|----------|----------|")
+		assert.Contains(t, capturedPost.Message, "| A-ABC123 |")
+		assert.Contains(t, capturedPost.Message, "⏳ Pending")
+		assert.Contains(t, capturedPost.Message, "@alice")
+		assert.Contains(t, capturedPost.Message, "@bob")
+		assert.Contains(t, capturedPost.Message, "2024-01-11")
+
+		api.AssertExpectations(t)
 		store.AssertExpectations(t)
 	})
 
@@ -643,24 +669,36 @@ func TestExecuteList(t *testing.T) {
 		}
 		store.On("GetUserApprovals", "user123").Return(records, nil)
 
+		// Story 7.5: Mock SendEphemeralPost to capture the message
+		var capturedPost *model.Post
+		api.On("SendEphemeralPost", "user123", mock.MatchedBy(func(post *model.Post) bool {
+			capturedPost = post
+			return true
+		})).Return(&model.Post{})
+
 		args := &model.CommandArgs{
-			Command: "/approve list all", // Story 5.2: Use explicit 'all' filter to test sorting across all statuses
-			UserId:  "user123",
+			Command:   "/approve list all", // Story 5.2: Use explicit 'all' filter to test sorting across all statuses
+			UserId:    "user123",
+			ChannelId: "channel123",
 		}
 
 		resp, err := router.Route(args)
 		assert.NoError(t, err)
 		assert.NotNil(t, resp)
+
+		// Verify the message was sent via ephemeral post
+		assert.NotNil(t, capturedPost)
 		// Verify records appear in order (newest first)
-		assert.Contains(t, resp.Text, "A-NEW")
-		assert.Contains(t, resp.Text, "A-MID")
-		assert.Contains(t, resp.Text, "A-OLD")
+		assert.Contains(t, capturedPost.Message, "A-NEW")
+		assert.Contains(t, capturedPost.Message, "A-MID")
+		assert.Contains(t, capturedPost.Message, "A-OLD")
 
 		// Verify A-NEW appears before A-OLD in output
-		newPos := strings.Index(resp.Text, "A-NEW")
-		oldPos := strings.Index(resp.Text, "A-OLD")
+		newPos := strings.Index(capturedPost.Message, "A-NEW")
+		oldPos := strings.Index(capturedPost.Message, "A-OLD")
 		assert.Less(t, newPos, oldPos, "Newest record should appear before oldest")
 
+		api.AssertExpectations(t)
 		store.AssertExpectations(t)
 	})
 
@@ -683,26 +721,37 @@ func TestExecuteList(t *testing.T) {
 		}
 		store.On("GetUserApprovals", "user123").Return(records, nil)
 
+		// Story 7.5: Mock SendEphemeralPost to capture the message
+		var capturedPost *model.Post
+		api.On("SendEphemeralPost", "user123", mock.MatchedBy(func(post *model.Post) bool {
+			capturedPost = post
+			return true
+		})).Return(&model.Post{})
+
 		args := &model.CommandArgs{
-			Command: "/approve list",
-			UserId:  "user123",
+			Command:   "/approve list",
+			UserId:    "user123",
+			ChannelId: "channel123",
 		}
 
 		resp, err := router.Route(args)
 		assert.NoError(t, err)
 		assert.NotNil(t, resp)
 
+		// Verify the message was sent via ephemeral post
+		assert.NotNil(t, capturedPost)
 		// Should show first 20 records
-		assert.Contains(t, resp.Text, "A-REC00")
-		assert.Contains(t, resp.Text, "A-REC19")
+		assert.Contains(t, capturedPost.Message, "A-REC00")
+		assert.Contains(t, capturedPost.Message, "A-REC19")
 		// Should NOT show 21st record
-		assert.NotContains(t, resp.Text, "A-REC20")
-		assert.NotContains(t, resp.Text, "A-REC24")
+		assert.NotContains(t, capturedPost.Message, "A-REC20")
+		assert.NotContains(t, capturedPost.Message, "A-REC24")
 
 		// Should show pagination footer with new format (Story 4.6: updated message)
-		assert.Contains(t, resp.Text, "Showing 20 of 25 total records")
-		assert.Contains(t, resp.Text, "/approve get")
+		assert.Contains(t, capturedPost.Message, "Showing 20 of 25 total records")
+		assert.Contains(t, capturedPost.Message, "/approve get")
 
+		api.AssertExpectations(t)
 		store.AssertExpectations(t)
 	})
 
@@ -726,18 +775,30 @@ func TestExecuteList(t *testing.T) {
 		}
 		store.On("GetUserApprovals", "user123").Return(records, nil)
 
+		// Story 7.5: Mock SendEphemeralPost to capture the message
+		var capturedPost *model.Post
+		api.On("SendEphemeralPost", "user123", mock.MatchedBy(func(post *model.Post) bool {
+			capturedPost = post
+			return true
+		})).Return(&model.Post{})
+
 		args := &model.CommandArgs{
-			Command: "/approve list",
-			UserId:  "user123",
+			Command:   "/approve list",
+			UserId:    "user123",
+			ChannelId: "channel123",
 		}
 
 		resp, err := router.Route(args)
 		assert.NoError(t, err)
 		assert.NotNil(t, resp)
-		assert.Contains(t, resp.Text, "A-USER1")
+
+		// Verify the message was sent via ephemeral post
+		assert.NotNil(t, capturedPost)
+		assert.Contains(t, capturedPost.Message, "A-USER1")
 
 		// Verify store was called with correct user ID
 		store.AssertCalled(t, "GetUserApprovals", "user123")
+		api.AssertExpectations(t)
 		store.AssertExpectations(t)
 	})
 
@@ -760,17 +821,29 @@ func TestExecuteList(t *testing.T) {
 		}
 		store.On("GetUserApprovals", "user123").Return(records, nil)
 
+		// Story 7.5: Mock SendEphemeralPost to capture the message
+		var capturedPost *model.Post
+		api.On("SendEphemeralPost", "user123", mock.MatchedBy(func(post *model.Post) bool {
+			capturedPost = post
+			return true
+		})).Return(&model.Post{})
+
 		args := &model.CommandArgs{
-			Command: "/approve list all", // Story 5.2: Use explicit 'all' filter to test access control across all statuses
-			UserId:  "user123",
+			Command:   "/approve list all", // Story 5.2: Use explicit 'all' filter to test access control across all statuses
+			UserId:    "user123",
+			ChannelId: "channel123",
 		}
 
 		resp, err := router.Route(args)
 		assert.NoError(t, err)
 		assert.NotNil(t, resp)
-		assert.Contains(t, resp.Text, "A-REQ1")
-		assert.Contains(t, resp.Text, "@alice") // Requester
 
+		// Verify the message was sent via ephemeral post
+		assert.NotNil(t, capturedPost)
+		assert.Contains(t, capturedPost.Message, "A-REQ1")
+		assert.Contains(t, capturedPost.Message, "@alice") // Requester
+
+		api.AssertExpectations(t)
 		store.AssertExpectations(t)
 	})
 
@@ -793,17 +866,29 @@ func TestExecuteList(t *testing.T) {
 		}
 		store.On("GetUserApprovals", "user123").Return(records, nil)
 
+		// Story 7.5: Mock SendEphemeralPost to capture the message
+		var capturedPost *model.Post
+		api.On("SendEphemeralPost", "user123", mock.MatchedBy(func(post *model.Post) bool {
+			capturedPost = post
+			return true
+		})).Return(&model.Post{})
+
 		args := &model.CommandArgs{
-			Command: "/approve list",
-			UserId:  "user123",
+			Command:   "/approve list",
+			UserId:    "user123",
+			ChannelId: "channel123",
 		}
 
 		resp, err := router.Route(args)
 		assert.NoError(t, err)
 		assert.NotNil(t, resp)
-		assert.Contains(t, resp.Text, "A-APP1")
-		assert.Contains(t, resp.Text, "@alice") // Approver
 
+		// Verify the message was sent via ephemeral post
+		assert.NotNil(t, capturedPost)
+		assert.Contains(t, capturedPost.Message, "A-APP1")
+		assert.Contains(t, capturedPost.Message, "@alice") // Approver
+
+		api.AssertExpectations(t)
 		store.AssertExpectations(t)
 	})
 
@@ -836,17 +921,29 @@ func TestExecuteList(t *testing.T) {
 		}
 		store.On("GetUserApprovals", "user123").Return(records, nil)
 
+		// Story 7.5: Mock SendEphemeralPost to capture the message
+		var capturedPost *model.Post
+		api.On("SendEphemeralPost", "user123", mock.MatchedBy(func(post *model.Post) bool {
+			capturedPost = post
+			return true
+		})).Return(&model.Post{})
+
 		args := &model.CommandArgs{
-			Command: "/approve list all", // Story 5.2: Use explicit 'all' filter to test both requester and approver records across all statuses
-			UserId:  "user123",
+			Command:   "/approve list all", // Story 5.2: Use explicit 'all' filter to test both requester and approver records across all statuses
+			UserId:    "user123",
+			ChannelId: "channel123",
 		}
 
 		resp, err := router.Route(args)
 		assert.NoError(t, err)
 		assert.NotNil(t, resp)
-		assert.Contains(t, resp.Text, "A-REQ")
-		assert.Contains(t, resp.Text, "A-APP")
 
+		// Verify the message was sent via ephemeral post
+		assert.NotNil(t, capturedPost)
+		assert.Contains(t, capturedPost.Message, "A-REQ")
+		assert.Contains(t, capturedPost.Message, "A-APP")
+
+		api.AssertExpectations(t)
 		store.AssertExpectations(t)
 	})
 
@@ -862,17 +959,27 @@ func TestExecuteList(t *testing.T) {
 		// Mock LogError call
 		api.On("LogError", mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything)
 
+		// Story 7.5: Mock SendEphemeralPost to capture the message
+		var capturedPost *model.Post
+		api.On("SendEphemeralPost", "user123", mock.MatchedBy(func(post *model.Post) bool {
+			capturedPost = post
+			return true
+		})).Return(&model.Post{})
+
 		args := &model.CommandArgs{
-			Command: "/approve list",
-			UserId:  "user123",
+			Command:   "/approve list",
+			UserId:    "user123",
+			ChannelId: "channel123",
 		}
 
 		resp, err := router.Route(args)
 		assert.NoError(t, err)
 		assert.NotNil(t, resp)
-		assert.Equal(t, model.CommandResponseTypeEphemeral, resp.ResponseType)
-		assert.Contains(t, resp.Text, "❌ Failed to retrieve approval records")
-		assert.Contains(t, resp.Text, "Please try again")
+
+		// Verify the message was sent via ephemeral post
+		assert.NotNil(t, capturedPost)
+		assert.Contains(t, capturedPost.Message, "❌ Failed to retrieve approval records")
+		assert.Contains(t, capturedPost.Message, "Please try again")
 
 		api.AssertExpectations(t)
 		store.AssertExpectations(t)
@@ -919,21 +1026,33 @@ func TestExecuteList(t *testing.T) {
 		}
 		store.On("GetUserApprovals", "user123").Return(records, nil)
 
+		// Story 7.5: Mock SendEphemeralPost to capture the message
+		var capturedPost *model.Post
+		api.On("SendEphemeralPost", mock.Anything, mock.MatchedBy(func(post *model.Post) bool {
+			capturedPost = post
+			return true
+		})).Return(&model.Post{})
+
 		args := &model.CommandArgs{
 			Command: "/approve list all", // Story 5.2: Use explicit 'all' filter to test icons for all status types
 			UserId:  "user123",
+			ChannelId: "channel123",
 		}
 
 		resp, err := router.Route(args)
 		assert.NoError(t, err)
 		assert.NotNil(t, resp)
 
-		// Verify status icons
-		assert.Contains(t, resp.Text, "✅ Approved")
-		assert.Contains(t, resp.Text, "❌ Denied")
-		assert.Contains(t, resp.Text, "⏳ Pending")
-		assert.Contains(t, resp.Text, "🚫 Canceled")
+		// Verify the message was sent via ephemeral post
+		assert.NotNil(t, capturedPost)
 
+		// Verify status icons
+		assert.Contains(t, capturedPost.Message, "✅ Approved")
+		assert.Contains(t, capturedPost.Message, "❌ Denied")
+		assert.Contains(t, capturedPost.Message, "⏳ Pending")
+		assert.Contains(t, capturedPost.Message, "🚫 Canceled")
+
+		api.AssertExpectations(t)
 		store.AssertExpectations(t)
 	})
 
@@ -956,18 +1075,30 @@ func TestExecuteList(t *testing.T) {
 		}
 		store.On("GetUserApprovals", "user123").Return(records, nil)
 
+		// Story 7.5: Mock SendEphemeralPost to capture the message
+		var capturedPost *model.Post
+		api.On("SendEphemeralPost", mock.Anything, mock.MatchedBy(func(post *model.Post) bool {
+			capturedPost = post
+			return true
+		})).Return(&model.Post{})
+
 		args := &model.CommandArgs{
 			Command: "/approve list",
 			UserId:  "user123",
+			ChannelId: "channel123",
 		}
 
 		resp, err := router.Route(args)
 		assert.NoError(t, err)
 		assert.NotNil(t, resp)
 
-		// Verify timestamp format: YYYY-MM-DD HH:MM
-		assert.Contains(t, resp.Text, "2024-01-10 14:30")
+		// Verify the message was sent via ephemeral post
+		assert.NotNil(t, capturedPost)
 
+		// Verify timestamp format: YYYY-MM-DD HH:MM
+		assert.Contains(t, capturedPost.Message, "2024-01-10 14:30")
+
+		api.AssertExpectations(t)
 		store.AssertExpectations(t)
 	})
 
@@ -997,17 +1128,29 @@ func TestExecuteList(t *testing.T) {
 		}
 		store.On("GetUserApprovals", "user123").Return(records, nil)
 
+		// Story 7.5: Mock SendEphemeralPost to capture the message
+		var capturedPost *model.Post
+		api.On("SendEphemeralPost", mock.Anything, mock.MatchedBy(func(post *model.Post) bool {
+			capturedPost = post
+			return true
+		})).Return(&model.Post{})
+
 		args := &model.CommandArgs{
 			Command: "/approve list", // Defaults to pending
 			UserId:  "user123",
+			ChannelId: "channel123",
 		}
 
 		resp, err := router.Route(args)
 		assert.NoError(t, err)
 		assert.NotNil(t, resp)
-		// Story 5.2 AC2, AC3: Header should show count
-		assert.Contains(t, resp.Text, "## Your Approval Requests (2 pending)")
 
+		// Verify the message was sent via ephemeral post
+		assert.NotNil(t, capturedPost)
+		// Story 5.2 AC2, AC3: Header should show count
+		assert.Contains(t, capturedPost.Message, "## Your Approval Requests (2 pending)")
+
+		api.AssertExpectations(t)
 		store.AssertExpectations(t)
 	})
 
@@ -1029,17 +1172,29 @@ func TestExecuteList(t *testing.T) {
 		}
 		store.On("GetUserApprovals", "user123").Return(records, nil)
 
+		// Story 7.5: Mock SendEphemeralPost to capture the message
+		var capturedPost *model.Post
+		api.On("SendEphemeralPost", mock.Anything, mock.MatchedBy(func(post *model.Post) bool {
+			capturedPost = post
+			return true
+		})).Return(&model.Post{})
+
 		args := &model.CommandArgs{
 			Command: "/approve list approved",
 			UserId:  "user123",
+			ChannelId: "channel123",
 		}
 
 		resp, err := router.Route(args)
 		assert.NoError(t, err)
 		assert.NotNil(t, resp)
-		// Story 5.2 AC3: Header should show count with filter type
-		assert.Contains(t, resp.Text, "## Your Approval Requests (1 approved)")
 
+		// Verify the message was sent via ephemeral post
+		assert.NotNil(t, capturedPost)
+		// Story 5.2 AC3: Header should show count with filter type
+		assert.Contains(t, capturedPost.Message, "## Your Approval Requests (1 approved)")
+
+		api.AssertExpectations(t)
 		store.AssertExpectations(t)
 	})
 
@@ -1078,17 +1233,29 @@ func TestExecuteList(t *testing.T) {
 		}
 		store.On("GetUserApprovals", "user123").Return(records, nil)
 
+		// Story 7.5: Mock SendEphemeralPost to capture the message
+		var capturedPost *model.Post
+		api.On("SendEphemeralPost", mock.Anything, mock.MatchedBy(func(post *model.Post) bool {
+			capturedPost = post
+			return true
+		})).Return(&model.Post{})
+
 		args := &model.CommandArgs{
 			Command: "/approve list all",
 			UserId:  "user123",
+			ChannelId: "channel123",
 		}
 
 		resp, err := router.Route(args)
 		assert.NoError(t, err)
 		assert.NotNil(t, resp)
-		// Story 5.2 AC3: Header should show total count for "all" filter
-		assert.Contains(t, resp.Text, "## Your Approval Requests (3 all)")
 
+		// Verify the message was sent via ephemeral post
+		assert.NotNil(t, capturedPost)
+		// Story 5.2 AC3: Header should show total count for "all" filter
+		assert.Contains(t, capturedPost.Message, "## Your Approval Requests (3 all)")
+
+		api.AssertExpectations(t)
 		store.AssertExpectations(t)
 	})
 
@@ -1100,17 +1267,29 @@ func TestExecuteList(t *testing.T) {
 		records := []*approval.ApprovalRecord{}
 		store.On("GetUserApprovals", "user123").Return(records, nil)
 
+		// Story 7.5: Mock SendEphemeralPost to capture the message
+		var capturedPost *model.Post
+		api.On("SendEphemeralPost", mock.Anything, mock.MatchedBy(func(post *model.Post) bool {
+			capturedPost = post
+			return true
+		})).Return(&model.Post{})
+
 		args := &model.CommandArgs{
 			Command: "/approve list pending",
 			UserId:  "user123",
+			ChannelId: "channel123",
 		}
 
 		resp, err := router.Route(args)
 		assert.NoError(t, err)
 		assert.NotNil(t, resp)
-		// Story 5.2 AC4: Empty state message for zero count
-		assert.Contains(t, resp.Text, "No pending approval requests")
 
+		// Verify the message was sent via ephemeral post
+		assert.NotNil(t, capturedPost)
+		// Story 5.2 AC4: Empty state message for zero count
+		assert.Contains(t, capturedPost.Message, "No pending approval requests")
+
+		api.AssertExpectations(t)
 		store.AssertExpectations(t)
 	})
 }
@@ -1894,6 +2073,10 @@ func TestFormatListResponse_GroupedSections(t *testing.T) {
 		assert.Contains(t, result, "**Decided Approvals:**")
 		assert.Contains(t, result, "**Canceled Requests:**")
 
+		// Verify markdown table format
+		assert.Contains(t, result, "| Code | Status | Requestor | Approver | Created |")
+		assert.Contains(t, result, "|------|--------|-----------|----------|----------|")
+
 		// Verify order of sections (pending before decided before canceled)
 		pendingIdx := strings.Index(result, "**Pending Approvals:**")
 		decidedIdx := strings.Index(result, "**Decided Approvals:**")
@@ -1902,10 +2085,10 @@ func TestFormatListResponse_GroupedSections(t *testing.T) {
 		assert.True(t, pendingIdx < decidedIdx, "Pending should come before Decided")
 		assert.True(t, decidedIdx < canceledIdx, "Decided should come before Canceled")
 
-		// Verify records appear in correct sections
-		assert.Contains(t, result, "A-PND1")
-		assert.Contains(t, result, "A-APP1")
-		assert.Contains(t, result, "A-CAN1")
+		// Verify records appear in correct sections (in table row format)
+		assert.Contains(t, result, "| A-PND1 |")
+		assert.Contains(t, result, "| A-APP1 |")
+		assert.Contains(t, result, "| A-CAN1 |")
 	})
 
 	t.Run("omits empty sections", func(t *testing.T) {

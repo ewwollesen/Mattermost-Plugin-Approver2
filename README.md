@@ -10,13 +10,16 @@ This plugin enables teams to request and grant official approvals without leavin
 
 - **`/approve new`** - Create approval requests via interactive modal
 - **`/approve list`** - View all approval requests (submitted and received)
-- **`/approve get [ID]`** - View specific approval record details
-- **`/approve cancel [ID]`** - Cancel pending approval requests
+- **`/approve get [CODE]`** - View specific approval record details
+- **`/approve cancel [CODE]`** - Cancel pending approval requests
+- **`/approve verify [CODE]`** - Mark approved requests as verified
+- **`/approve status`** - View approval statistics (admin only)
 - **`/approve help`** - Display available commands and usage
+- **Autocomplete** - Discover commands and arguments as you type
 - **Immutable approval records** - Tamper-proof audit trail
 - **DM notifications** - Automatic notifications to approvers
 - **Interactive buttons** - One-click approve/deny with confirmation
-- **Human-friendly codes** - Easy-to-reference IDs (e.g., TUZ-2RK)
+- **Human-friendly codes** - Easy-to-reference IDs (e.g., A-X7K9Q2)
 - **No external dependencies** - Pure Mattermost integration
 
 ## Installation
@@ -43,9 +46,9 @@ Opens a modal to select an approver and describe what needs approval.
 
 ### View Your Approvals
 ```
-/approve list
+/approve list [pending|approved|denied|canceled|all]
 ```
-Shows all approval requests you've submitted or received.
+Shows all approval requests you've submitted or received. Use filters to see specific statuses.
 
 ### Get Help
 ```

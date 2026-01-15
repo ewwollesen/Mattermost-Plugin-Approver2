@@ -1,4 +1,4 @@
-# generated: 2026-01-13
+# generated: 2026-01-15
 # project: Mattermost-Plugin-Approver2
 # project_key: mattermost-plugin-approver2
 # tracking_system: file-system
@@ -33,7 +33,7 @@
 # - SM typically creates next story after previous one is 'done' to incorporate learnings
 # - Dev moves story to 'review', then runs code-review (fresh context, different LLM recommended)
 
-generated: 2026-01-13
+generated: 2026-01-15
 project: Mattermost-Plugin-Approver2
 project_key: mattermost-plugin-approver2
 tracking_system: file-system
@@ -92,3 +92,12 @@ development_status:
   6-1-auto-timeout-for-pending-approval-requests: done
   6-2-verification-step-for-approved-requests: done
   epic-6-retrospective: optional
+
+  # Epic 7: 1.0 Polish & UX Improvements
+  epic-7: in-progress
+  7-1-fix-cancellation-notification-to-requestor: done
+  7-2-fix-cicd-build-failures-on-tag-push: done
+  7-3-fix-additional-details-box-behavior-in-cancel-dialog: done
+  7-4-add-autocomplete-for-slash-command-arguments: done
+  7-5-convert-approve-list-output-to-markdown-table: review
+  epic-7-retrospective: optional

@@ -656,24 +656,25 @@ func (p *Plugin) handleCancelModalSubmission(payload *model.SubmitDialogRequest)
 		}
 	}
 
-	otherText := ""
-	if otherVal, ok := payload.Submission["other_reason_text"]; ok {
-		if otherStr, ok := otherVal.(string); ok {
-			otherText = strings.TrimSpace(otherStr)
+	// Extract additional details (optional, always captured - Story 7.3)
+	additionalDetails := ""
+	if detailsVal, ok := payload.Submission["additional_details"]; ok {
+		if detailsStr, ok := detailsVal.(string); ok {
+			additionalDetails = strings.TrimSpace(detailsStr)
 		}
 	}
 
-	// Validate "Other" reason requires text (AC8)
-	if reasonCode == "other" && otherText == "" {
+	// Validate "Other" reason requires additional details
+	if reasonCode == "other" && additionalDetails == "" {
 		return &model.SubmitDialogResponse{
 			Errors: map[string]string{
-				"other_reason_text": "Please provide details when selecting 'Other reason'",
+				"additional_details": "Please provide details when selecting 'Other reason'",
 			},
 		}
 	}
 
-	// Map reason code to human-readable text
-	reasonText := p.mapCancellationReason(reasonCode, otherText)
+	// Map reason code to human-readable text (Story 7.3: no longer passes details)
+	reasonText := p.mapCancellationReason(reasonCode)
 
 	// Get approval record
 	record, err := p.store.GetApproval(approvalID)
@@ -711,8 +712,8 @@ func (p *Plugin) handleCancelModalSubmission(payload *model.SubmitDialogRequest)
 		}
 	}
 
-	// Call service to cancel approval (Story 4.4 already implemented)
-	err = p.service.CancelApproval(record.Code, payload.UserId, reasonText)
+	// Call service to cancel approval (Story 7.3: pass details separately)
+	err = p.service.CancelApproval(record.Code, payload.UserId, reasonText, additionalDetails)
 	if err != nil {
 		p.API.LogError("Failed to cancel approval",
 			"error", err.Error(),
@@ -782,8 +783,8 @@ func (p *Plugin) handleCancelModalSubmission(payload *model.SubmitDialogRequest)
 }
 
 // mapCancellationReason maps reason codes to human-readable text
-// Story 4.3: Convert form values to display strings for data instrumentation
-func (p *Plugin) mapCancellationReason(code, otherText string) string {
+// Story 7.3: Details stored separately in CanceledDetails field
+func (p *Plugin) mapCancellationReason(code string) string {
 	switch code {
 	case "no_longer_needed":
 		return "No longer needed"
@@ -792,7 +793,7 @@ func (p *Plugin) mapCancellationReason(code, otherText string) string {
 	case "sensitive_info":
 		return "Sensitive information"
 	case "other":
-		return fmt.Sprintf("Other: %s", otherText)
+		return "Other" // Details stored separately in CanceledDetails
 	default:
 		return "Unknown reason"
 	}

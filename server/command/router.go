@@ -410,10 +410,21 @@ func (r *Router) executeList(args *model.CommandArgs) (*model.CommandResponse, e
 		}
 
 		if !validFilters[filter] {
-			return &model.CommandResponse{
-				ResponseType: model.CommandResponseTypeEphemeral,
-				Text:         fmt.Sprintf("Invalid filter '%s'. Valid filters: pending, approved, denied, canceled, all", parts[2]),
-			}, nil
+			errorMsg := fmt.Sprintf("Invalid filter '%s'. Valid filters: pending, approved, denied, canceled, all", parts[2])
+			post := &model.Post{
+				UserId:    args.UserId,
+				ChannelId: args.ChannelId,
+				Message:   errorMsg,
+			}
+			ephemeralPost := r.api.SendEphemeralPost(args.UserId, post)
+			if ephemeralPost == nil {
+				// Fallback to CommandResponse if ephemeral post fails
+				return &model.CommandResponse{
+					ResponseType: model.CommandResponseTypeEphemeral,
+					Text:         errorMsg,
+				}, nil
+			}
+			return &model.CommandResponse{}, nil
 		}
 	}
 
@@ -426,10 +437,21 @@ func (r *Router) executeList(args *model.CommandArgs) (*model.CommandResponse, e
 			"user_id", args.UserId,
 			"error", err.Error(),
 		)
-		return &model.CommandResponse{
-			ResponseType: model.CommandResponseTypeEphemeral,
-			Text:         "❌ Failed to retrieve approval records. Please try again.",
-		}, nil
+		errorMsg := "❌ Failed to retrieve approval records. Please try again."
+		post := &model.Post{
+			UserId:    args.UserId,
+			ChannelId: args.ChannelId,
+			Message:   errorMsg,
+		}
+		ephemeralPost := r.api.SendEphemeralPost(args.UserId, post)
+		if ephemeralPost == nil {
+			// Fallback to CommandResponse if ephemeral post fails
+			return &model.CommandResponse{
+				ResponseType: model.CommandResponseTypeEphemeral,
+				Text:         errorMsg,
+			}, nil
+		}
+		return &model.CommandResponse{}, nil
 	}
 
 	// Apply status filter (Story 5.1)
@@ -438,10 +460,20 @@ func (r *Router) executeList(args *model.CommandArgs) (*model.CommandResponse, e
 	// Handle empty state (Story 5.2: Filter-specific message)
 	if len(filteredRecords) == 0 {
 		emptyMessage := fmt.Sprintf("No %s approval requests. Use `/approve list all` to see all requests.", filter)
-		return &model.CommandResponse{
-			ResponseType: model.CommandResponseTypeEphemeral,
-			Text:         emptyMessage,
-		}, nil
+		post := &model.Post{
+			UserId:    args.UserId,
+			ChannelId: args.ChannelId,
+			Message:   emptyMessage,
+		}
+		ephemeralPost := r.api.SendEphemeralPost(args.UserId, post)
+		if ephemeralPost == nil {
+			// Fallback to CommandResponse if ephemeral post fails
+			return &model.CommandResponse{
+				ResponseType: model.CommandResponseTypeEphemeral,
+				Text:         emptyMessage,
+			}, nil
+		}
+		return &model.CommandResponse{}, nil
 	}
 
 	// Apply chronological sorting for specific status filters (Story 5.1, Subtask 2.5)
@@ -455,13 +487,29 @@ func (r *Router) executeList(args *model.CommandArgs) (*model.CommandResponse, e
 		displayRecords = filteredRecords[:20]
 	}
 
-	// Format and return response (Story 5.2: Pass filter for dynamic header)
+	// Format response (Story 5.2: Pass filter for dynamic header)
 	responseText := formatListResponse(displayRecords, total, filter)
 
-	return &model.CommandResponse{
-		ResponseType: model.CommandResponseTypeEphemeral,
-		Text:         responseText,
-	}, nil
+	// Story 7.5: Send as ephemeral post instead of CommandResponse to enable markdown table rendering
+	// CommandResponse.Text doesn't properly render markdown tables in Mattermost
+	post := &model.Post{
+		UserId:    args.UserId,
+		ChannelId: args.ChannelId,
+		Message:   responseText,
+	}
+
+	ephemeralPost := r.api.SendEphemeralPost(args.UserId, post)
+	if ephemeralPost == nil {
+		r.api.LogError("Failed to send ephemeral list response", "user_id", args.UserId)
+		// Fallback to CommandResponse if ephemeral post fails
+		return &model.CommandResponse{
+			ResponseType: model.CommandResponseTypeEphemeral,
+			Text:         responseText,
+		}, nil
+	}
+
+	// Return empty response since we already sent the ephemeral post
+	return &model.CommandResponse{}, nil
 }
 
 // filterRecordsByStatus filters approval records by status type (Story 5.1)
@@ -605,7 +653,9 @@ func formatListResponse(records []*approval.ApprovalRecord, total int, filter st
 
 	// Render Pending section
 	if len(pending) > 0 {
-		output.WriteString("**Pending Approvals:**\n")
+		output.WriteString("**Pending Approvals:**\n\n")
+		output.WriteString("| Code | Status | Requestor | Approver | Created |\n")
+		output.WriteString("|------|--------|-----------|----------|----------|\n")
 		for _, record := range pending {
 			if displayed >= limit {
 				break
@@ -613,7 +663,7 @@ func formatListResponse(records []*approval.ApprovalRecord, total int, filter st
 			statusIcon := getStatusIcon(record.Status)
 			createdTime := time.Unix(0, record.CreatedAt*int64(time.Millisecond))
 			formattedDate := createdTime.UTC().Format("2006-01-02 15:04")
-			output.WriteString(fmt.Sprintf("**%s** | %s | Requested by: @%s | Approver: @%s | %s\n",
+			output.WriteString(fmt.Sprintf("| %s | %s | @%s | @%s | %s |\n",
 				record.Code, statusIcon, record.RequesterUsername, record.ApproverUsername, formattedDate))
 			displayed++
 		}
@@ -622,7 +672,9 @@ func formatListResponse(records []*approval.ApprovalRecord, total int, filter st
 
 	// Render Decided section
 	if len(decided) > 0 && displayed < limit {
-		output.WriteString("**Decided Approvals:**\n")
+		output.WriteString("**Decided Approvals:**\n\n")
+		output.WriteString("| Code | Status | Requestor | Approver | Created |\n")
+		output.WriteString("|------|--------|-----------|----------|----------|\n")
 		for _, record := range decided {
 			if displayed >= limit {
 				break
@@ -630,7 +682,7 @@ func formatListResponse(records []*approval.ApprovalRecord, total int, filter st
 			statusIcon := getStatusIcon(record.Status)
 			createdTime := time.Unix(0, record.CreatedAt*int64(time.Millisecond))
 			formattedDate := createdTime.UTC().Format("2006-01-02 15:04")
-			output.WriteString(fmt.Sprintf("**%s** | %s | Requested by: @%s | Approver: @%s | %s\n",
+			output.WriteString(fmt.Sprintf("| %s | %s | @%s | @%s | %s |\n",
 				record.Code, statusIcon, record.RequesterUsername, record.ApproverUsername, formattedDate))
 			displayed++
 		}
@@ -639,7 +691,9 @@ func formatListResponse(records []*approval.ApprovalRecord, total int, filter st
 
 	// Render Canceled section (with reason)
 	if len(canceled) > 0 && displayed < limit {
-		output.WriteString("**Canceled Requests:**\n")
+		output.WriteString("**Canceled Requests:**\n\n")
+		output.WriteString("| Code | Status | Requestor | Approver | Created |\n")
+		output.WriteString("|------|--------|-----------|----------|----------|\n")
 		for _, record := range canceled {
 			if displayed >= limit {
 				break
@@ -661,7 +715,7 @@ func formatListResponse(records []*approval.ApprovalRecord, total int, filter st
 
 			createdTime := time.Unix(0, record.CreatedAt*int64(time.Millisecond))
 			formattedDate := createdTime.UTC().Format("2006-01-02 15:04")
-			output.WriteString(fmt.Sprintf("**%s** | %s | Requested by: @%s | Approver: @%s | %s\n",
+			output.WriteString(fmt.Sprintf("| %s | %s | @%s | @%s | %s |\n",
 				record.Code, statusText, record.RequesterUsername, record.ApproverUsername, formattedDate))
 			displayed++
 		}
@@ -770,7 +824,7 @@ func formatRecordDetail(record *approval.ApprovalRecord) string {
 	// Description (AC3)
 	output.WriteString(fmt.Sprintf("**Description:**\n%s\n\n", record.Description))
 
-	// Cancellation details (Story 4.5: display reason/timestamp for canceled requests)
+	// Cancellation details (Story 7.3: display reason, details, and timestamp)
 	if record.Status == approval.StatusCanceled {
 		output.WriteString("---\n\n")
 		output.WriteString("**Cancellation:**\n")
@@ -781,6 +835,11 @@ func formatRecordDetail(record *approval.ApprovalRecord) string {
 			reason = "No reason recorded (canceled before v0.2.0)"
 		}
 		output.WriteString(fmt.Sprintf("**Reason:** %s\n", reason))
+
+		// Additional details (Story 7.3: display if present)
+		if record.CanceledDetails != "" {
+			output.WriteString(fmt.Sprintf("**Details:** %s\n", record.CanceledDetails))
+		}
 
 		// Who canceled (only requester can cancel in v0.2.0)
 		output.WriteString(fmt.Sprintf("**Canceled by:** @%s\n", record.RequesterUsername))

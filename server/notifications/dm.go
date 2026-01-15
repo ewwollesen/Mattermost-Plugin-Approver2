@@ -268,16 +268,23 @@ func SendCancellationNotificationDM(api plugin.API, botUserID string, record *ap
 		canceledReason = "Not specified"
 	}
 
-	// Construct DM message
+	// Construct DM message (Story 7.3: include details if present)
 	message := fmt.Sprintf("🚫 **Approval Request Canceled**\n\n"+
 		"**Reference:** `%s`\n"+
 		"**Requester:** @%s\n"+
-		"**Reason:** %s\n"+
-		"**Canceled:** %s\n\n"+
-		"The approval request you received has been canceled by the requester.",
+		"**Reason:** %s",
 		record.Code,
 		record.RequesterUsername,
 		canceledReason,
+	)
+
+	// Add details if present (Story 7.3)
+	if record.CanceledDetails != "" {
+		message += fmt.Sprintf("\n**Details:** %s", record.CanceledDetails)
+	}
+
+	message += fmt.Sprintf("\n**Canceled:** %s\n\n"+
+		"The approval request you received has been canceled by the requester.",
 		canceledAtStr,
 	)
 
@@ -387,22 +394,31 @@ func SendRequesterCancellationNotificationDM(api plugin.API, botUserID string, r
 	// Format cancellation timestamp
 	cancelTime := time.UnixMilli(record.CanceledAt).UTC().Format("Jan 02, 2006 3:04 PM")
 
-	// Build notification message (requestor perspective)
+	// Build notification message (requestor perspective, Story 7.3: include details if present)
 	message := fmt.Sprintf(`🚫 **Your Approval Request Was Canceled**
 
 **Request ID:** `+"`%s`"+`
 **Original Request:** %s
 **Approver:** @%s
-**Reason:** %s
+**Reason:** %s`,
+		record.Code,
+		record.Description,
+		record.ApproverUsername,
+		record.CanceledReason,
+	)
+
+	// Add details if present (Story 7.3)
+	if record.CanceledDetails != "" {
+		message += fmt.Sprintf(`
+**Details:** %s`, record.CanceledDetails)
+	}
+
+	message += fmt.Sprintf(`
 **Canceled:** %s
 
 ---
 
 The approver has canceled this approval request. You may submit a new request if needed.`,
-		record.Code,
-		record.Description,
-		record.ApproverUsername,
-		record.CanceledReason,
 		cancelTime,
 	)
 

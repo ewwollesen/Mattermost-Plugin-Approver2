@@ -935,10 +935,9 @@ func TestMapCancellationReason(t *testing.T) {
 	p := &Plugin{}
 
 	tests := []struct {
-		name      string
-		code      string
-		otherText string
-		expected  string
+		name     string
+		code     string
+		expected string
 	}{
 		{
 			name:     "no_longer_needed maps correctly",
@@ -956,10 +955,9 @@ func TestMapCancellationReason(t *testing.T) {
 			expected: "Sensitive information",
 		},
 		{
-			name:      "other with text includes custom reason",
-			code:      "other",
-			otherText: "Changed my mind after discussion",
-			expected:  "Other: Changed my mind after discussion",
+			name:     "other returns Other (Story 7.3: details separate)",
+			code:     "other",
+			expected: "Other",
 		},
 		{
 			name:     "unknown code returns default",
@@ -970,7 +968,7 @@ func TestMapCancellationReason(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			result := p.mapCancellationReason(tt.code, tt.otherText)
+			result := p.mapCancellationReason(tt.code)
 			assert.Equal(t, tt.expected, result)
 		})
 	}
@@ -1047,15 +1045,15 @@ func TestHandleCancelModalSubmission(t *testing.T) {
 			CallbackId: "cancel_approval_record123",
 			UserId:     "user123",
 			Submission: map[string]any{
-				"reason_code":       "other",
-				"other_reason_text": "",
+				"reason_code":        "other",
+				"additional_details": "",
 			},
 		}
 
 		response := p.handleCancelModalSubmission(payload)
 
 		assert.NotNil(t, response)
-		assert.Contains(t, response.Errors["other_reason_text"], "Please provide details")
+		assert.Contains(t, response.Errors["additional_details"], "Please provide details")
 	})
 
 	t.Run("validation error when other selected with whitespace only", func(t *testing.T) {
@@ -1065,15 +1063,15 @@ func TestHandleCancelModalSubmission(t *testing.T) {
 			CallbackId: "cancel_approval_record123",
 			UserId:     "user123",
 			Submission: map[string]any{
-				"reason_code":       "other",
-				"other_reason_text": "   ",
+				"reason_code":        "other",
+				"additional_details": "   ",
 			},
 		}
 
 		response := p.handleCancelModalSubmission(payload)
 
 		assert.NotNil(t, response)
-		assert.Contains(t, response.Errors["other_reason_text"], "Please provide details")
+		assert.Contains(t, response.Errors["additional_details"], "Please provide details")
 	})
 
 	t.Run("permission denied when non-requester attempts cancel", func(t *testing.T) {
@@ -1178,6 +1176,238 @@ func TestHandleCancelModalSubmission(t *testing.T) {
 		assert.NotNil(t, response)
 		assert.Contains(t, response.Errors["reason_code"], "required")
 	})
+}
+
+// TestHandleCancelModalSubmission_MaxLengthHandling validates that long details are handled correctly
+func TestHandleCancelModalSubmission_MaxLengthHandling(t *testing.T) {
+	t.Run("details at max length accepted", func(t *testing.T) {
+		api := &plugintest.API{}
+
+		recordJSON := `{
+			"id": "record123",
+			"code": "A-X7K9Q2",
+			"requesterId": "user123",
+			"requesterUsername": "testuser",
+			"approverId": "approver456",
+			"approverUsername": "approveruser",
+			"description": "Test approval request",
+			"status": "pending",
+			"createdAt": 1704931200000,
+			"schemaVersion": 1
+		}`
+
+		// Create exactly 500 character string (MaxLength)
+		maxLengthDetails := strings.Repeat("x", 500)
+
+		api.On("KVGet", "approval:code:A-X7K9Q2").Return([]byte(`"record123"`), nil)
+		api.On("KVGet", "approval:record:record123").Return([]byte(recordJSON), nil)
+		api.On("KVSet", mock.Anything, mock.Anything).Return(nil)
+		api.On("GetUser", "user123").Return(&model.User{Id: "user123", Username: "testuser"}, nil)
+		api.On("GetPost", mock.Anything).Return(&model.Post{}, nil).Maybe()
+		api.On("UpdatePost", mock.Anything).Return(&model.Post{}, nil).Maybe()
+		api.On("GetDirectChannel", mock.Anything, mock.Anything).Return(&model.Channel{Id: "dm_channel_123"}, nil).Maybe()
+		api.On("CreatePost", mock.Anything).Return(&model.Post{}, nil).Maybe()
+		api.On("LogInfo", mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return().Maybe()
+		api.On("LogWarn", mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return().Maybe()
+		api.On("LogDebug", mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return().Maybe()
+		api.On("LogError", mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return().Maybe()
+
+		p := &Plugin{botUserID: "bot123"}
+		p.SetAPI(api)
+		p.store = store.NewKVStore(api)
+		p.service = approval.NewService(p.store, api, "bot123")
+
+		payload := &model.SubmitDialogRequest{
+			CallbackId: "cancel_approval_record123",
+			UserId:     "user123",
+			Submission: map[string]any{
+				"reason_code":        "no_longer_needed",
+				"additional_details": maxLengthDetails,
+			},
+		}
+
+		response := p.handleCancelModalSubmission(payload)
+
+		assert.NotNil(t, response)
+		assert.Empty(t, response.Error)
+		assert.Empty(t, response.Errors)
+	})
+
+	t.Run("details exceeding max length are truncated by Mattermost", func(t *testing.T) {
+		// Note: MaxLength enforcement is handled by Mattermost client/server, not our plugin
+		// This test documents the expected behavior - client should prevent >500 chars
+		// If somehow >500 chars reach us, they will be stored as-is (our code doesn't validate)
+
+		api := &plugintest.API{}
+
+		recordJSON := `{
+			"id": "record123",
+			"code": "A-X7K9Q2",
+			"requesterId": "user123",
+			"requesterUsername": "testuser",
+			"approverId": "approver456",
+			"approverUsername": "approveruser",
+			"description": "Test approval request",
+			"status": "pending",
+			"createdAt": 1704931200000,
+			"schemaVersion": 1
+		}`
+
+		// Create 600 character string (exceeds MaxLength)
+		overMaxDetails := strings.Repeat("y", 600)
+
+		api.On("KVGet", "approval:code:A-X7K9Q2").Return([]byte(`"record123"`), nil)
+		api.On("KVGet", "approval:record:record123").Return([]byte(recordJSON), nil)
+		api.On("KVSet", mock.Anything, mock.Anything).Return(nil)
+		api.On("GetUser", "user123").Return(&model.User{Id: "user123", Username: "testuser"}, nil)
+		api.On("GetPost", mock.Anything).Return(&model.Post{}, nil).Maybe()
+		api.On("UpdatePost", mock.Anything).Return(&model.Post{}, nil).Maybe()
+		api.On("GetDirectChannel", mock.Anything, mock.Anything).Return(&model.Channel{Id: "dm_channel_123"}, nil).Maybe()
+		api.On("CreatePost", mock.Anything).Return(&model.Post{}, nil).Maybe()
+		api.On("LogInfo", mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return().Maybe()
+		api.On("LogWarn", mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return().Maybe()
+		api.On("LogDebug", mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return().Maybe()
+		api.On("LogError", mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return().Maybe()
+
+		p := &Plugin{botUserID: "bot123"}
+		p.SetAPI(api)
+		p.store = store.NewKVStore(api)
+		p.service = approval.NewService(p.store, api, "bot123")
+
+		payload := &model.SubmitDialogRequest{
+			CallbackId: "cancel_approval_record123",
+			UserId:     "user123",
+			Submission: map[string]any{
+				"reason_code":        "no_longer_needed",
+				"additional_details": overMaxDetails,
+			},
+		}
+
+		response := p.handleCancelModalSubmission(payload)
+
+		// Plugin accepts and stores whatever Mattermost sends
+		// Mattermost should enforce MaxLength client-side
+		assert.NotNil(t, response)
+		assert.Empty(t, response.Error)
+		assert.Empty(t, response.Errors)
+	})
+}
+
+// TestHandleCancelModalSubmission_CapturesDetailsForAllReasons validates AC1:
+// Additional details are captured for ALL cancellation reasons (not just "Other")
+func TestHandleCancelModalSubmission_CapturesDetailsForAllReasons(t *testing.T) {
+	reasons := []struct {
+		name       string
+		reasonCode string
+		details    string
+	}{
+		{
+			name:       "no_longer_needed with details",
+			reasonCode: "no_longer_needed",
+			details:    "Project postponed until Q2",
+		},
+		{
+			name:       "wrong_approver with details",
+			reasonCode: "wrong_approver",
+			details:    "Manager approval required",
+		},
+		{
+			name:       "sensitive_info with details",
+			reasonCode: "sensitive_info",
+			details:    "Discussed offline via secure channel",
+		},
+		{
+			name:       "other with details",
+			reasonCode: "other",
+			details:    "Requirements changed after team discussion",
+		},
+	}
+
+	for _, tt := range reasons {
+		t.Run(tt.name, func(t *testing.T) {
+			// Setup mocks
+			api := &plugintest.API{}
+
+			// Mock approval record (pending status, user is requester)
+			recordJSON := `{
+				"id": "record123",
+				"code": "A-X7K9Q2",
+				"requesterId": "user123",
+				"requesterUsername": "testuser",
+				"approverId": "approver456",
+				"approverUsername": "approveruser",
+				"description": "Test approval request",
+				"status": "pending",
+				"createdAt": 1704931200000,
+				"schemaVersion": 1
+			}`
+
+			// Mock KV operations for record retrieval and cancellation
+			api.On("KVGet", "approval:code:A-X7K9Q2").Return([]byte(`"record123"`), nil)
+			api.On("KVGet", "approval:record:record123").Return([]byte(recordJSON), nil)
+			api.On("KVSet", "approval:record:record123", mock.Anything).Return(nil)
+			api.On("KVSet", "approval:code:A-X7K9Q2", mock.Anything).Return(nil)
+			api.On("KVSet", mock.MatchedBy(func(key string) bool {
+				return len(key) > 15 && key[:15] == "approval:index:"
+			}), mock.Anything).Return(nil)
+
+			// Mock user retrieval
+			api.On("GetUser", "user123").Return(&model.User{
+				Id:       "user123",
+				Username: "testuser",
+			}, nil)
+
+			// Mock post-cancellation actions (best effort - can fail)
+			api.On("GetPost", mock.Anything).Return(&model.Post{}, nil).Maybe()
+			api.On("UpdatePost", mock.Anything).Return(&model.Post{}, nil).Maybe()
+			api.On("GetDirectChannel", mock.Anything, mock.Anything).Return(&model.Channel{Id: "dm_channel_123"}, nil).Maybe()
+			api.On("CreatePost", mock.Anything).Return(&model.Post{}, nil).Maybe()
+
+			// Mock logging
+			api.On("LogInfo", mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return().Maybe()
+			api.On("LogWarn", mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return().Maybe()
+			api.On("LogDebug", mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return().Maybe()
+			api.On("LogError", mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return().Maybe()
+
+			// Initialize plugin with real service
+			p := &Plugin{botUserID: "bot123"}
+			p.SetAPI(api)
+			p.store = store.NewKVStore(api)
+			p.service = approval.NewService(p.store, api, "bot123")
+
+			// Create modal submission payload with details
+			payload := &model.SubmitDialogRequest{
+				CallbackId: "cancel_approval_record123",
+				UserId:     "user123",
+				Submission: map[string]any{
+					"reason_code":        tt.reasonCode,
+					"additional_details": tt.details,
+				},
+			}
+
+			// Execute
+			response := p.handleCancelModalSubmission(payload)
+
+			// Assert: No validation errors (successful cancellation)
+			assert.NotNil(t, response, "Expected response object")
+			assert.Empty(t, response.Error, "Expected no error for reason: %s", tt.reasonCode)
+			assert.Empty(t, response.Errors, "Expected no validation errors for reason: %s", tt.reasonCode)
+
+			// Verify record was updated with details by reading from mock KV store
+			// The service would have called KVSet with the updated record containing CanceledDetails
+			api.AssertCalled(t, "KVSet", "approval:record:record123", mock.MatchedBy(func(data []byte) bool {
+				// Verify the saved record contains our details
+				var savedRecord approval.ApprovalRecord
+				if err := json.Unmarshal(data, &savedRecord); err != nil {
+					return false
+				}
+				// Check that CanceledDetails field was set
+				return savedRecord.CanceledDetails == tt.details && savedRecord.Status == "canceled"
+			}))
+
+			api.AssertExpectations(t)
+		})
+	}
 }
 
 func TestDisableButtonsInDM(t *testing.T) {

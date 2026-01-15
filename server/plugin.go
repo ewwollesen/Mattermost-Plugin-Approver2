@@ -91,16 +91,68 @@ func (p *Plugin) registerCommand() error {
 		Trigger:          "approve",
 		AutoComplete:     true,
 		AutoCompleteDesc: "Manage approval requests",
-		AutoCompleteHint: "[new|list [pending|approved|denied|canceled|all]|get|cancel|verify|status|help]",
+		AutoCompleteHint: "[new|list|get|cancel|verify|status|help]",
 		DisplayName:      "Approval Request",
 		Description:      "Create, manage, and view approval requests",
 	}
+
+	// Create rich autocomplete structure (Story 7.4)
+	autocomplete := p.getAutocompleteData()
+	cmd.AutocompleteData = autocomplete
 
 	if err := p.API.RegisterCommand(cmd); err != nil {
 		return fmt.Errorf("failed to register command: %w", err)
 	}
 
 	return nil
+}
+
+// getAutocompleteData creates rich autocomplete structure for /approve command
+// Story 7.4: Provides nested autocomplete for subcommands and arguments
+func (p *Plugin) getAutocompleteData() *model.AutocompleteData {
+	approve := model.NewAutocompleteData("approve", "[new|list|get|cancel|verify|status|help]", "Manage approval requests")
+
+	// New subcommand
+	new := model.NewAutocompleteData("new", "", "Create a new approval request")
+	approve.AddCommand(new)
+
+	// List subcommand with filter autocomplete
+	list := model.NewAutocompleteData("list", "[pending|approved|denied|canceled|all]", "View your approval requests")
+	listFilters := []model.AutocompleteListItem{
+		{HelpText: "Show only pending requests", Item: "pending"},
+		{HelpText: "Show only approved requests", Item: "approved"},
+		{HelpText: "Show only denied requests", Item: "denied"},
+		{HelpText: "Show only canceled requests", Item: "canceled"},
+		{HelpText: "Show all requests", Item: "all"},
+	}
+	list.AddStaticListArgument("Filter requests by status", false, listFilters)
+	approve.AddCommand(list)
+
+	// Get subcommand
+	get := model.NewAutocompleteData("get", "<approval-code>", "Display specific approval request")
+	get.AddTextArgument("Approval code", "Enter the approval code (e.g., A-X7K9Q2)", "")
+	approve.AddCommand(get)
+
+	// Cancel subcommand
+	cancel := model.NewAutocompleteData("cancel", "<approval-code>", "Cancel a pending request")
+	cancel.AddTextArgument("Approval code", "Enter the approval code (e.g., A-X7K9Q2)", "")
+	approve.AddCommand(cancel)
+
+	// Verify subcommand (Story 6.2)
+	verify := model.NewAutocompleteData("verify", "<approval-code> [comment]", "Mark approved request as verified")
+	verify.AddTextArgument("Approval code", "Enter the approval code (e.g., A-X7K9Q2)", "")
+	verify.AddTextArgument("Comment", "Optional verification comment", "")
+	approve.AddCommand(verify)
+
+	// Status subcommand (admin only)
+	status := model.NewAutocompleteData("status", "[--failed-notifications]", "View approval statistics (admin only)")
+	approve.AddCommand(status)
+
+	// Help subcommand
+	help := model.NewAutocompleteData("help", "", "Show command help")
+	approve.AddCommand(help)
+
+	return approve
 }
 
 // ExecuteCommand executes a command that has been previously registered via the RegisterCommand API.
@@ -241,12 +293,13 @@ func (p *Plugin) openCancellationModal(triggerID string, approvalCode string, re
 					HelpText: "Help us understand why requests are canceled",
 				},
 				{
-					DisplayName: "Additional details (if Other)",
-					Name:        "other_reason_text",
+					DisplayName: "Additional details (optional)",
+					Name:        "additional_details",
 					Type:        "textarea",
-					Placeholder: "Please explain...",
+					Placeholder: "e.g., Project scope changed, requirements updated...",
 					Optional:    true,
 					MaxLength:   500,
+					HelpText:    "Add context or explanation (optional)",
 				},
 			},
 			SubmitLabel: "Cancel Request",

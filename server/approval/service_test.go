@@ -232,7 +232,7 @@ func TestCancelApproval(t *testing.T) {
 			service := NewService(mockStore, mockAPI, "bot-user-id")
 
 			// Execute
-			err := service.CancelApproval(tt.approvalCode, tt.requesterID, tt.reason)
+			err := service.CancelApproval(tt.approvalCode, tt.requesterID, tt.reason, "")
 
 			// Verify error expectations
 			if tt.wantErr {
@@ -273,7 +273,7 @@ func TestCancelApproval_TimestampSet(t *testing.T) {
 	})).Return(nil)
 
 	service := NewService(mockStore, mockAPI, "bot-user-id")
-	err := service.CancelApproval("A-X7K9Q2", "user123", "No longer needed")
+	err := service.CancelApproval("A-X7K9Q2", "user123", "No longer needed", "")
 
 	assert.NoError(t, err)
 	assert.Equal(t, StatusCanceled, record.Status)
@@ -349,7 +349,7 @@ func TestCancelApproval_WhitespaceValidation(t *testing.T) {
 			}
 
 			service := NewService(mockStore, mockAPI, "bot-user-id")
-			err := service.CancelApproval(tt.code, tt.requesterID, tt.reason)
+			err := service.CancelApproval(tt.code, tt.requesterID, tt.reason, "")
 
 			if tt.errContains != "" {
 				assert.Error(t, err)
@@ -385,7 +385,7 @@ func TestCancelApproval_InvalidFormat(t *testing.T) {
 			mockAPI := &plugintest.API{}
 
 			service := NewService(mockStore, mockAPI, "bot-user-id")
-			err := service.CancelApproval(tt.code, "user123", "No longer needed")
+			err := service.CancelApproval(tt.code, "user123", "No longer needed", "")
 
 			assert.Error(t, err)
 			if tt.code == "" {
@@ -408,13 +408,74 @@ func TestCancelApproval_CorruptedIndex(t *testing.T) {
 	mockStore.On("GetByCode", "A-X7K9Q2").Return(nil, fmt.Errorf("approval record deleted-id-123: %w", ErrRecordNotFound))
 
 	service := NewService(mockStore, mockAPI, "bot-user-id")
-	err := service.CancelApproval("A-X7K9Q2", "user123", "No longer needed")
+	err := service.CancelApproval("A-X7K9Q2", "user123", "No longer needed", "")
 
 	assert.Error(t, err)
 	assert.Contains(t, err.Error(), "failed to retrieve approval")
 	assert.ErrorIs(t, err, ErrRecordNotFound)
 
 	mockStore.AssertExpectations(t)
+}
+
+func TestCancelApproval_CapturesDetails(t *testing.T) {
+	// Story 7.3: Verify details are captured for all cancellation reasons
+	tests := []struct {
+		name    string
+		reason  string
+		details string
+	}{
+		{
+			name:    "no_longer_needed with details",
+			reason:  "No longer needed",
+			details: "Project postponed",
+		},
+		{
+			name:    "wrong_approver with details",
+			reason:  "Wrong approver",
+			details: "Manager approval needed",
+		},
+		{
+			name:    "other with details",
+			reason:  "Other",
+			details: "Requirements changed",
+		},
+		{
+			name:    "reason without details",
+			reason:  "No longer needed",
+			details: "",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			mockStore := new(MockApprovalStore)
+			mockAPI := &plugintest.API{}
+
+			record := &ApprovalRecord{
+				ID:          "record123",
+				Code:        "A-TEST01",
+				RequesterID: "user123",
+				Status:      StatusPending,
+				CreatedAt:   1704931200000,
+			}
+
+			mockStore.On("GetByCode", "A-TEST01").Return(record, nil)
+			mockStore.On("SaveApproval", mock.MatchedBy(func(r *ApprovalRecord) bool {
+				// Verify details are stored
+				return r.CanceledDetails == tt.details &&
+					r.CanceledReason == tt.reason &&
+					r.Status == StatusCanceled
+			})).Return(nil)
+
+			mockAPI.On("LogInfo", mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything).Maybe()
+
+			service := NewService(mockStore, mockAPI, "bot-user-id")
+			err := service.CancelApproval("A-TEST01", "user123", tt.reason, tt.details)
+
+			assert.NoError(t, err)
+			mockStore.AssertExpectations(t)
+		})
+	}
 }
 
 // TestVerifyRequest verifies the verification flow with various scenarios
