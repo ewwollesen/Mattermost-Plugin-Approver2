@@ -167,11 +167,8 @@ func (s *Service) CancelApprovalByID(approvalID, requesterID string, isAutoCance
 
 	// Send timeout notification to requester (best-effort, graceful degradation)
 	// Only send for auto-cancel; manual cancellations use different notification flow
-	if isAutoCancel {
-		// Import notifications package at top of file
-		// For now, we'll return without notification - caller (timeout checker) will handle notification
-		// This keeps the service layer focused on business logic
-	}
+	// Note: isAutoCancel checked above for logging - notification handled by caller (timeout checker)
+	// This keeps the service layer focused on business logic
 
 	return nil
 }

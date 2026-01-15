@@ -95,7 +95,7 @@ func TestCheckTimeoutsSkipsNonPendingRequests(t *testing.T) {
 		Code:        "A-X7K9Q2",
 		Status:      approval.StatusApproved,
 		RequesterID: "user123",
-		CreatedAt:   time.Now().Add(-1 * time.Hour).Unix() * 1000, // Old enough
+		CreatedAt:   time.Now().Add(-1*time.Hour).Unix() * 1000, // Old enough
 	}
 
 	// Mock KVList to return approver index key
@@ -134,7 +134,7 @@ func TestCheckTimeoutsSkipsNewRequests(t *testing.T) {
 		Code:        "A-X7K9Q2",
 		Status:      approval.StatusPending,
 		RequesterID: "user123",
-		CreatedAt:   time.Now().Add(-5 * time.Minute).Unix() * 1000, // Only 5 minutes old
+		CreatedAt:   time.Now().Add(-5*time.Minute).Unix() * 1000, // Only 5 minutes old
 	}
 
 	// Mock KVList to return approver index key
@@ -168,7 +168,7 @@ func TestCheckTimeoutsHappyPath(t *testing.T) {
 	mockService := approval.NewService(mockStore, mockAPI, "bot123")
 
 	// Create a timed-out pending record (created 31 minutes ago)
-	oldTime := time.Now().Add(-31 * time.Minute).Unix() * 1000
+	oldTime := time.Now().Add(-31*time.Minute).Unix() * 1000
 	timedOutRecord := &approval.ApprovalRecord{
 		ID:                  "record123",
 		Code:                "A-X7K9Q2",

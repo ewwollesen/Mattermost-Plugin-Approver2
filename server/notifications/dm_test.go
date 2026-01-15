@@ -1563,17 +1563,17 @@ func TestSendVerificationNotificationDM(t *testing.T) {
 
 		// Create test approval record
 		record := &approval.ApprovalRecord{
-			ID:                  "approval123",
-			Code:                "A-X7K9Q2",
-			ApproverID:          approverID,
-			RequesterID:         "requester123",
-			RequesterUsername:   "alice",
+			ID:                   "approval123",
+			Code:                 "A-X7K9Q2",
+			ApproverID:           approverID,
+			RequesterID:          "requester123",
+			RequesterUsername:    "alice",
 			RequesterDisplayName: "Alice Smith",
-			Description:         "Deploy to production",
-			Status:              approval.StatusApproved,
-			Verified:            true,
-			VerifiedAt:          1704931400000, // Jan 10, 2024
-			VerificationComment: "",
+			Description:          "Deploy to production",
+			Status:               approval.StatusApproved,
+			Verified:             true,
+			VerifiedAt:           1704931400000, // Jan 10, 2024
+			VerificationComment:  "",
 		}
 
 		// Execute
@@ -1606,17 +1606,17 @@ func TestSendVerificationNotificationDM(t *testing.T) {
 
 		// Create test approval record with comment
 		record := &approval.ApprovalRecord{
-			ID:                  "approval123",
-			Code:                "A-X7K9Q2",
-			ApproverID:          approverID,
-			RequesterID:         "requester123",
-			RequesterUsername:   "alice",
+			ID:                   "approval123",
+			Code:                 "A-X7K9Q2",
+			ApproverID:           approverID,
+			RequesterID:          "requester123",
+			RequesterUsername:    "alice",
 			RequesterDisplayName: "Alice Smith",
-			Description:         "Deploy to production",
-			Status:              approval.StatusApproved,
-			Verified:            true,
-			VerifiedAt:          1704931400000,
-			VerificationComment: "Deployment completed successfully",
+			Description:          "Deploy to production",
+			Status:               approval.StatusApproved,
+			Verified:             true,
+			VerifiedAt:           1704931400000,
+			VerificationComment:  "Deployment completed successfully",
 		}
 
 		// Execute

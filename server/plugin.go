@@ -363,7 +363,8 @@ func (p *Plugin) handleVerifyCommand(args *model.CommandArgs, split []string) *m
 	}
 
 	// Call service to verify request (updates record)
-	if err := p.service.VerifyRequest(approvalCode, requesterID, comment); err != nil {
+	err = p.service.VerifyRequest(approvalCode, requesterID, comment)
+	if err != nil {
 		p.API.LogError("Failed to verify approval request",
 			"error", err.Error(),
 			"approval_code", approvalCode,
