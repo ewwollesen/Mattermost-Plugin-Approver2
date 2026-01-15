@@ -437,33 +437,7 @@ make major              # For breaking changes (X.0.0)
 
 The Makefile handles tag creation and pushing. GitHub Actions automatically builds release artifacts.
 
-## Release Information
-
-**Current Version:** v1.0.0 (Released 2026-01-15)
-
-**Download:** [GitHub Releases](https://github.com/ewwollesen/Mattermost-Plugin-Approver2/releases)
-
-**What's New in v1.0.0:**
-
-- Professional markdown table output for approval lists
-- Slash command autocomplete
-- Request timeout system
-- Verification workflow for approved requests
-- Cancellation reasons with predefined options
-- Admin statistics command
-- List filtering by status
-
-**All 7 planned epics completed - Production ready!**
-
-See [CHANGELOG.md](CHANGELOG.md) for complete version history.
-
-### Versioning
-
-This plugin follows [Semantic Versioning](https://semver.org/):
-
-- **Major** (X.0.0) - Breaking changes requiring migration
-- **Minor** (0.X.0) - New features, backward compatible
-- **Patch** (0.0.X) - Bug fixes and minor improvements
+For release notes and version history, see [CHANGELOG.md](CHANGELOG.md).
 
 ## License
 
