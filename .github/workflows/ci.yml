@@ -1,12 +1,16 @@
 name: ci
+# This workflow runs on:
+# - Daily schedule (cron)
+# - Pushes to master branch
+# - Pull requests
+# Note: Tag-based releases are handled exclusively by release.yml
 on:
   schedule:
     - cron: "0 0 * * *"
   push:
     branches:
       - master
-    tags:
-      - "v*"
+    # Tags are NOT included here - see release.yml for tag-based builds
   pull_request:
 
 permissions:
