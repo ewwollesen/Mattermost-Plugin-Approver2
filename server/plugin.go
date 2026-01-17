@@ -8,6 +8,7 @@ import (
 	"github.com/mattermost/mattermost-plugin-approver2/server/approval"
 	"github.com/mattermost/mattermost-plugin-approver2/server/command"
 	"github.com/mattermost/mattermost-plugin-approver2/server/notifications"
+	"github.com/mattermost/mattermost-plugin-approver2/server/playbooks"
 	"github.com/mattermost/mattermost-plugin-approver2/server/store"
 	"github.com/mattermost/mattermost-plugin-approver2/server/timeout"
 	"github.com/mattermost/mattermost/server/public/model"
@@ -36,6 +37,9 @@ type Plugin struct {
 
 	// botUserID is the ID of the bot user for sending notifications
 	botUserID string
+
+	// playbooksClient handles communication with Mattermost Playbooks plugin
+	playbooksClient *playbooks.Client
 }
 
 // OnActivate is called when the plugin is activated.
@@ -62,6 +66,18 @@ func (p *Plugin) OnActivate() error {
 	// Initialize and start timeout checker (Story 6.1)
 	p.timeoutChecker = timeout.NewChecker(p.store, p.service, p.API, botID)
 	p.timeoutChecker.Start()
+
+	// Initialize Playbooks integration (Story 8.1)
+	// Note: Bot token authentication will be implemented in Story 8.6
+	siteURL := p.API.GetConfig().ServiceSettings.SiteURL
+	if siteURL != nil && *siteURL != "" {
+		// TODO: Implement proper bot token authentication in Story 8.6
+		// For now, use empty token (Playbooks plugin may allow plugin-to-plugin calls)
+		p.playbooksClient = playbooks.NewClient(p.API, *siteURL, "")
+		p.API.LogInfo("Playbooks integration initialized")
+	} else {
+		p.API.LogWarn("Site URL not configured, Playbooks integration disabled")
+	}
 
 	// Register slash command
 	if err := p.registerCommand(); err != nil {
@@ -161,7 +177,7 @@ func (p *Plugin) ExecuteCommand(c *plugin.Context, args *model.CommandArgs) (*mo
 	split := strings.Fields(args.Command)
 	if len(split) < 2 {
 		// Use router for help/empty command
-		router := command.NewRouter(p.API, p.store)
+		router := command.NewRouter(p.API, p.store, p.playbooksClient)
 		response, _ := router.Route(args)
 		return response, nil
 	}
@@ -179,7 +195,7 @@ func (p *Plugin) ExecuteCommand(c *plugin.Context, args *model.CommandArgs) (*mo
 	}
 
 	// For other commands, use the router
-	router := command.NewRouter(p.API, p.store)
+	router := command.NewRouter(p.API, p.store, p.playbooksClient)
 	response, err := router.Route(args)
 	if err != nil {
 		p.API.LogError("Command execution failed", "error", err.Error(), "command", args.Command)

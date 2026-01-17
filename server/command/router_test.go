@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	"github.com/mattermost/mattermost-plugin-approver2/server/approval"
+	"github.com/mattermost/mattermost-plugin-approver2/server/playbooks"
 	"github.com/mattermost/mattermost/server/public/model"
 	"github.com/mattermost/mattermost/server/public/plugin/plugintest"
 	"github.com/stretchr/testify/assert"
@@ -44,7 +45,7 @@ func (m *mockStore) GetApprovalByCode(code string) (*approval.ApprovalRecord, er
 func TestRoute(t *testing.T) {
 	api := &plugintest.API{}
 	store := &mockStore{}
-	router := NewRouter(api, store)
+	router := NewRouter(api, store, nil)
 
 	tests := []struct {
 		name             string
@@ -86,7 +87,7 @@ func TestRouteNew(t *testing.T) {
 	t.Run("new command opens modal dialog with correct structure", func(t *testing.T) {
 		api := &plugintest.API{}
 		store := &mockStore{}
-		router := NewRouter(api, store)
+		router := NewRouter(api, store, nil)
 
 		// Mock GetConfig to return site URL
 		siteURL := "https://mattermost.example.com"
@@ -166,7 +167,7 @@ func TestRouteNew(t *testing.T) {
 	t.Run("new command with missing trigger_id returns error", func(t *testing.T) {
 		api := &plugintest.API{}
 		store := &mockStore{}
-		router := NewRouter(api, store)
+		router := NewRouter(api, store, nil)
 
 		args := &model.CommandArgs{
 			Command:   "/approve new",
@@ -184,7 +185,7 @@ func TestRouteNew(t *testing.T) {
 	t.Run("new command with missing site URL returns error", func(t *testing.T) {
 		api := &plugintest.API{}
 		store := &mockStore{}
-		router := NewRouter(api, store)
+		router := NewRouter(api, store, nil)
 
 		// Mock GetConfig to return empty site URL
 		config := &model.Config{}
@@ -214,7 +215,7 @@ func TestRouteNew(t *testing.T) {
 	t.Run("new command with nil site URL returns error", func(t *testing.T) {
 		api := &plugintest.API{}
 		store := &mockStore{}
-		router := NewRouter(api, store)
+		router := NewRouter(api, store, nil)
 
 		// Mock GetConfig to return nil site URL
 		config := &model.Config{}
@@ -242,7 +243,7 @@ func TestRouteNew(t *testing.T) {
 	t.Run("new command with OpenInteractiveDialog failure returns error", func(t *testing.T) {
 		api := &plugintest.API{}
 		store := &mockStore{}
-		router := NewRouter(api, store)
+		router := NewRouter(api, store, nil)
 
 		// Mock GetConfig to return site URL
 		siteURL := "https://mattermost.example.com"
@@ -278,7 +279,7 @@ func TestExecuteStatus(t *testing.T) {
 	t.Run("status command requires system admin", func(t *testing.T) {
 		api := &plugintest.API{}
 		store := &mockStore{}
-		router := NewRouter(api, store)
+		router := NewRouter(api, store, nil)
 
 		// Mock GetUser to return non-admin user
 		user := &model.User{
@@ -304,7 +305,7 @@ func TestExecuteStatus(t *testing.T) {
 	t.Run("status command returns no approvals message when empty", func(t *testing.T) {
 		api := &plugintest.API{}
 		store := &mockStore{}
-		router := NewRouter(api, store)
+		router := NewRouter(api, store, nil)
 
 		// Mock GetUser to return admin user
 		user := &model.User{
@@ -333,7 +334,7 @@ func TestExecuteStatus(t *testing.T) {
 	t.Run("status command displays statistics correctly", func(t *testing.T) {
 		api := &plugintest.API{}
 		store := &mockStore{}
-		router := NewRouter(api, store)
+		router := NewRouter(api, store, nil)
 
 		// Mock GetUser to return admin user
 		user := &model.User{
@@ -406,7 +407,7 @@ func TestExecuteStatus(t *testing.T) {
 	t.Run("status command with --failed-notifications flag", func(t *testing.T) {
 		api := &plugintest.API{}
 		store := &mockStore{}
-		router := NewRouter(api, store)
+		router := NewRouter(api, store, nil)
 
 		// Mock GetUser to return admin user
 		user := &model.User{
@@ -470,7 +471,7 @@ func TestExecuteStatus(t *testing.T) {
 	t.Run("status command with --failed-notifications when all notifications succeeded", func(t *testing.T) {
 		api := &plugintest.API{}
 		store := &mockStore{}
-		router := NewRouter(api, store)
+		router := NewRouter(api, store, nil)
 
 		// Mock GetUser to return admin user
 		user := &model.User{
@@ -516,7 +517,7 @@ func TestExecuteStatus(t *testing.T) {
 	t.Run("status command handles store error gracefully", func(t *testing.T) {
 		api := &plugintest.API{}
 		store := &mockStore{}
-		router := NewRouter(api, store)
+		router := NewRouter(api, store, nil)
 
 		// Mock GetUser to return admin user
 		user := &model.User{
@@ -550,7 +551,7 @@ func TestExecuteList(t *testing.T) {
 	t.Run("empty state - user with no records", func(t *testing.T) {
 		api := &plugintest.API{}
 		store := &mockStore{}
-		router := NewRouter(api, store)
+		router := NewRouter(api, store, nil)
 
 		// Mock store to return empty slice
 		store.On("GetUserApprovals", "user123").Return([]*approval.ApprovalRecord{}, nil)
@@ -585,7 +586,7 @@ func TestExecuteList(t *testing.T) {
 	t.Run("single record - verifies formatting and status icons", func(t *testing.T) {
 		api := &plugintest.API{}
 		store := &mockStore{}
-		router := NewRouter(api, store)
+		router := NewRouter(api, store, nil)
 
 		records := []*approval.ApprovalRecord{
 			{
@@ -638,7 +639,7 @@ func TestExecuteList(t *testing.T) {
 	t.Run("multiple records - verifies sorting by most recent first", func(t *testing.T) {
 		api := &plugintest.API{}
 		store := &mockStore{}
-		router := NewRouter(api, store)
+		router := NewRouter(api, store, nil)
 
 		// Create records with different timestamps (store returns them sorted)
 		records := []*approval.ApprovalRecord{
@@ -705,7 +706,7 @@ func TestExecuteList(t *testing.T) {
 	t.Run("pagination - shows only first 20 records with footer", func(t *testing.T) {
 		api := &plugintest.API{}
 		store := &mockStore{}
-		router := NewRouter(api, store)
+		router := NewRouter(api, store, nil)
 
 		// Create 25 records
 		records := make([]*approval.ApprovalRecord, 25)
@@ -758,7 +759,7 @@ func TestExecuteList(t *testing.T) {
 	t.Run("access control - user sees only their records", func(t *testing.T) {
 		api := &plugintest.API{}
 		store := &mockStore{}
-		router := NewRouter(api, store)
+		router := NewRouter(api, store, nil)
 
 		// Records already filtered by store (GetUserApprovals does this)
 		records := []*approval.ApprovalRecord{
@@ -805,7 +806,7 @@ func TestExecuteList(t *testing.T) {
 	t.Run("requester records - user sees records where they are requester", func(t *testing.T) {
 		api := &plugintest.API{}
 		store := &mockStore{}
-		router := NewRouter(api, store)
+		router := NewRouter(api, store, nil)
 
 		records := []*approval.ApprovalRecord{
 			{
@@ -850,7 +851,7 @@ func TestExecuteList(t *testing.T) {
 	t.Run("approver records - user sees records where they are approver", func(t *testing.T) {
 		api := &plugintest.API{}
 		store := &mockStore{}
-		router := NewRouter(api, store)
+		router := NewRouter(api, store, nil)
 
 		records := []*approval.ApprovalRecord{
 			{
@@ -895,7 +896,7 @@ func TestExecuteList(t *testing.T) {
 	t.Run("mixed records - user sees both requester and approver records", func(t *testing.T) {
 		api := &plugintest.API{}
 		store := &mockStore{}
-		router := NewRouter(api, store)
+		router := NewRouter(api, store, nil)
 
 		records := []*approval.ApprovalRecord{
 			{
@@ -950,7 +951,7 @@ func TestExecuteList(t *testing.T) {
 	t.Run("KV store error handling - returns error message", func(t *testing.T) {
 		api := &plugintest.API{}
 		store := &mockStore{}
-		router := NewRouter(api, store)
+		router := NewRouter(api, store, nil)
 
 		// Mock store to return error
 		storeErr := fmt.Errorf("KV store connection failed")
@@ -988,7 +989,7 @@ func TestExecuteList(t *testing.T) {
 	t.Run("all status types - verifies correct icons", func(t *testing.T) {
 		api := &plugintest.API{}
 		store := &mockStore{}
-		router := NewRouter(api, store)
+		router := NewRouter(api, store, nil)
 
 		records := []*approval.ApprovalRecord{
 			{
@@ -1034,8 +1035,8 @@ func TestExecuteList(t *testing.T) {
 		})).Return(&model.Post{})
 
 		args := &model.CommandArgs{
-			Command: "/approve list all", // Story 5.2: Use explicit 'all' filter to test icons for all status types
-			UserId:  "user123",
+			Command:   "/approve list all", // Story 5.2: Use explicit 'all' filter to test icons for all status types
+			UserId:    "user123",
 			ChannelId: "channel123",
 		}
 
@@ -1059,7 +1060,7 @@ func TestExecuteList(t *testing.T) {
 	t.Run("timestamp formatting - verifies date format", func(t *testing.T) {
 		api := &plugintest.API{}
 		store := &mockStore{}
-		router := NewRouter(api, store)
+		router := NewRouter(api, store, nil)
 
 		// Use a specific timestamp: Jan 10, 2024 14:30:00 UTC
 		timestamp := int64(1704897000000) // milliseconds
@@ -1083,8 +1084,8 @@ func TestExecuteList(t *testing.T) {
 		})).Return(&model.Post{})
 
 		args := &model.CommandArgs{
-			Command: "/approve list",
-			UserId:  "user123",
+			Command:   "/approve list",
+			UserId:    "user123",
 			ChannelId: "channel123",
 		}
 
@@ -1106,7 +1107,7 @@ func TestExecuteList(t *testing.T) {
 	t.Run("header count - shows count for pending filter", func(t *testing.T) {
 		api := &plugintest.API{}
 		store := &mockStore{}
-		router := NewRouter(api, store)
+		router := NewRouter(api, store, nil)
 
 		records := []*approval.ApprovalRecord{
 			{
@@ -1136,8 +1137,8 @@ func TestExecuteList(t *testing.T) {
 		})).Return(&model.Post{})
 
 		args := &model.CommandArgs{
-			Command: "/approve list", // Defaults to pending
-			UserId:  "user123",
+			Command:   "/approve list", // Defaults to pending
+			UserId:    "user123",
 			ChannelId: "channel123",
 		}
 
@@ -1157,7 +1158,7 @@ func TestExecuteList(t *testing.T) {
 	t.Run("header count - shows count for approved filter", func(t *testing.T) {
 		api := &plugintest.API{}
 		store := &mockStore{}
-		router := NewRouter(api, store)
+		router := NewRouter(api, store, nil)
 
 		records := []*approval.ApprovalRecord{
 			{
@@ -1180,8 +1181,8 @@ func TestExecuteList(t *testing.T) {
 		})).Return(&model.Post{})
 
 		args := &model.CommandArgs{
-			Command: "/approve list approved",
-			UserId:  "user123",
+			Command:   "/approve list approved",
+			UserId:    "user123",
 			ChannelId: "channel123",
 		}
 
@@ -1201,7 +1202,7 @@ func TestExecuteList(t *testing.T) {
 	t.Run("header count - shows count for all filter", func(t *testing.T) {
 		api := &plugintest.API{}
 		store := &mockStore{}
-		router := NewRouter(api, store)
+		router := NewRouter(api, store, nil)
 
 		records := []*approval.ApprovalRecord{
 			{
@@ -1241,8 +1242,8 @@ func TestExecuteList(t *testing.T) {
 		})).Return(&model.Post{})
 
 		args := &model.CommandArgs{
-			Command: "/approve list all",
-			UserId:  "user123",
+			Command:   "/approve list all",
+			UserId:    "user123",
 			ChannelId: "channel123",
 		}
 
@@ -1262,7 +1263,7 @@ func TestExecuteList(t *testing.T) {
 	t.Run("header count - shows zero count", func(t *testing.T) {
 		api := &plugintest.API{}
 		store := &mockStore{}
-		router := NewRouter(api, store)
+		router := NewRouter(api, store, nil)
 
 		records := []*approval.ApprovalRecord{}
 		store.On("GetUserApprovals", "user123").Return(records, nil)
@@ -1275,8 +1276,8 @@ func TestExecuteList(t *testing.T) {
 		})).Return(&model.Post{})
 
 		args := &model.CommandArgs{
-			Command: "/approve list pending",
-			UserId:  "user123",
+			Command:   "/approve list pending",
+			UserId:    "user123",
 			ChannelId: "channel123",
 		}
 
@@ -1298,7 +1299,7 @@ func TestExecuteGet(t *testing.T) {
 	t.Run("successfully retrieves record by code", func(t *testing.T) {
 		api := &plugintest.API{}
 		store := &mockStore{}
-		router := NewRouter(api, store)
+		router := NewRouter(api, store, nil)
 
 		record := &approval.ApprovalRecord{
 			ID:                   "abc123def456ghi789jkl012",
@@ -1349,7 +1350,7 @@ func TestExecuteGet(t *testing.T) {
 	t.Run("successfully retrieves record by full 26-char ID", func(t *testing.T) {
 		api := &plugintest.API{}
 		store := &mockStore{}
-		router := NewRouter(api, store)
+		router := NewRouter(api, store, nil)
 
 		fullID := "abcdefghijklmnopqrstuvwxyz" // Exactly 26 chars
 		record := &approval.ApprovalRecord{
@@ -1383,7 +1384,7 @@ func TestExecuteGet(t *testing.T) {
 	t.Run("returns error when code not found", func(t *testing.T) {
 		api := &plugintest.API{}
 		store := &mockStore{}
-		router := NewRouter(api, store)
+		router := NewRouter(api, store, nil)
 
 		store.On("GetApprovalByCode", "A-NOTFND").Return(nil, fmt.Errorf("approval code A-NOTFND: %w", approval.ErrRecordNotFound))
 
@@ -1404,7 +1405,7 @@ func TestExecuteGet(t *testing.T) {
 	t.Run("returns usage help when code parameter missing", func(t *testing.T) {
 		api := &plugintest.API{}
 		store := &mockStore{}
-		router := NewRouter(api, store)
+		router := NewRouter(api, store, nil)
 
 		args := &model.CommandArgs{
 			Command: "/approve get",
@@ -1421,7 +1422,7 @@ func TestExecuteGet(t *testing.T) {
 	t.Run("requester can view their own request", func(t *testing.T) {
 		api := &plugintest.API{}
 		store := &mockStore{}
-		router := NewRouter(api, store)
+		router := NewRouter(api, store, nil)
 
 		record := &approval.ApprovalRecord{
 			ID:                "record1",
@@ -1454,7 +1455,7 @@ func TestExecuteGet(t *testing.T) {
 	t.Run("approver can view requests they approve", func(t *testing.T) {
 		api := &plugintest.API{}
 		store := &mockStore{}
-		router := NewRouter(api, store)
+		router := NewRouter(api, store, nil)
 
 		record := &approval.ApprovalRecord{
 			ID:                "record1",
@@ -1487,7 +1488,7 @@ func TestExecuteGet(t *testing.T) {
 	t.Run("unauthorized user receives permission denied", func(t *testing.T) {
 		api := &plugintest.API{}
 		store := &mockStore{}
-		router := NewRouter(api, store)
+		router := NewRouter(api, store, nil)
 
 		record := &approval.ApprovalRecord{
 			ID:          "record1",
@@ -1537,7 +1538,7 @@ func TestExecuteGet(t *testing.T) {
 			t.Run(tc.status, func(t *testing.T) {
 				api := &plugintest.API{}
 				store := &mockStore{}
-				router := NewRouter(api, store)
+				router := NewRouter(api, store, nil)
 
 				record := &approval.ApprovalRecord{
 					ID:                "record1",
@@ -1570,7 +1571,7 @@ func TestExecuteGet(t *testing.T) {
 	t.Run("displays decision comment when present", func(t *testing.T) {
 		api := &plugintest.API{}
 		store := &mockStore{}
-		router := NewRouter(api, store)
+		router := NewRouter(api, store, nil)
 
 		record := &approval.ApprovalRecord{
 			ID:                "record1",
@@ -1604,7 +1605,7 @@ func TestExecuteGet(t *testing.T) {
 	t.Run("omits decision comment when not present", func(t *testing.T) {
 		api := &plugintest.API{}
 		store := &mockStore{}
-		router := NewRouter(api, store)
+		router := NewRouter(api, store, nil)
 
 		record := &approval.ApprovalRecord{
 			ID:                "record1",
@@ -1637,7 +1638,7 @@ func TestExecuteGet(t *testing.T) {
 	t.Run("handles store error gracefully", func(t *testing.T) {
 		api := &plugintest.API{}
 		store := &mockStore{}
-		router := NewRouter(api, store)
+		router := NewRouter(api, store, nil)
 
 		storeErr := fmt.Errorf("KV store connection failed")
 		store.On("GetApprovalByCode", "A-TEST1").Return(nil, storeErr)
@@ -1664,7 +1665,7 @@ func TestExecuteGet(t *testing.T) {
 	t.Run("displays cancellation details for cancelled request with reason", func(t *testing.T) {
 		api := &plugintest.API{}
 		store := &mockStore{}
-		router := NewRouter(api, store)
+		router := NewRouter(api, store, nil)
 
 		record := &approval.ApprovalRecord{
 			ID:                   "record1",
@@ -1721,7 +1722,7 @@ func TestExecuteGet(t *testing.T) {
 	t.Run("displays fallback text for cancelled request without reason (old record)", func(t *testing.T) {
 		api := &plugintest.API{}
 		store := &mockStore{}
-		router := NewRouter(api, store)
+		router := NewRouter(api, store, nil)
 
 		record := &approval.ApprovalRecord{
 			ID:                   "record1",
@@ -1769,7 +1770,7 @@ func TestExecuteGet(t *testing.T) {
 	t.Run("displays cancellation with Other reason and custom text", func(t *testing.T) {
 		api := &plugintest.API{}
 		store := &mockStore{}
-		router := NewRouter(api, store)
+		router := NewRouter(api, store, nil)
 
 		record := &approval.ApprovalRecord{
 			ID:                   "record1",
@@ -1809,7 +1810,7 @@ func TestExecuteGet(t *testing.T) {
 	t.Run("displays cancellation with 'Changed requirements' reason", func(t *testing.T) {
 		api := &plugintest.API{}
 		store := &mockStore{}
-		router := NewRouter(api, store)
+		router := NewRouter(api, store, nil)
 
 		record := &approval.ApprovalRecord{
 			ID:                   "record1",
@@ -1848,7 +1849,7 @@ func TestExecuteGet(t *testing.T) {
 	t.Run("displays cancellation with 'Created by mistake' reason", func(t *testing.T) {
 		api := &plugintest.API{}
 		store := &mockStore{}
-		router := NewRouter(api, store)
+		router := NewRouter(api, store, nil)
 
 		record := &approval.ApprovalRecord{
 			ID:                   "record1",
@@ -1898,7 +1899,7 @@ func TestExecuteGet(t *testing.T) {
 			t.Run(tc.name, func(t *testing.T) {
 				api := &plugintest.API{}
 				store := &mockStore{}
-				router := NewRouter(api, store)
+				router := NewRouter(api, store, nil)
 
 				record := &approval.ApprovalRecord{
 					ID:                   "record1",
@@ -2476,5 +2477,203 @@ func TestFormatRecordDetail_Verification(t *testing.T) {
 			assert.NotContains(t, result, "**✅ Verification:**",
 				"Status %s should not show verification section", status)
 		}
+	})
+}
+
+// Story 8.1: Integration tests for playbook context detection
+// These tests verify that playbook detection integrates correctly with the /approve new flow
+
+// mockPlaybooksClient is a mock implementation of PlaybooksClientInterface
+type mockPlaybooksClient struct {
+	mock.Mock
+}
+
+func (m *mockPlaybooksClient) GetPlaybookRunByChannel(channelID string) (*playbooks.PlaybookRun, error) {
+	args := m.Called(channelID)
+	if args.Get(0) == nil {
+		return nil, args.Error(1)
+	}
+	return args.Get(0).(*playbooks.PlaybookRun), args.Error(1)
+}
+
+func TestExecuteNew_PlaybookIntegration(t *testing.T) {
+	t.Run("playbook detection succeeds - logs context and continues normally", func(t *testing.T) {
+		api := &plugintest.API{}
+		store := &mockStore{}
+		playbooksClient := &mockPlaybooksClient{}
+		router := NewRouter(api, store, playbooksClient)
+
+		// Mock playbooks client returning a run
+		run := &playbooks.PlaybookRun{
+			ID:          "run123",
+			Name:        "Incident #47 - Database Down",
+			Description: "Production database outage",
+			OwnerUserID: "user456",
+			TeamID:      "team789",
+			ChannelID:   "channel012",
+			CreateAt:    1705507200000,
+			EndAt:       0,
+			PlaybookID:  "playbook345",
+		}
+		playbooksClient.On("GetPlaybookRunByChannel", "channel012").Return(run, nil)
+
+		// Mock GetConfig to return site URL
+		siteURL := "https://mattermost.example.com"
+		config := &model.Config{}
+		config.ServiceSettings.SiteURL = &siteURL
+		api.On("GetConfig").Return(config)
+
+		// Mock OpenInteractiveDialog - approval creation should continue
+		api.On("OpenInteractiveDialog", mock.Anything).Return(nil)
+
+		// Mock LogDebug - should log playbook context detection
+		var loggedRunID, loggedRunName string
+		api.On("LogDebug", "Detected playbook context", mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything).Run(func(args mock.Arguments) {
+			// Capture logged values
+			for i := 1; i < len(args); i += 2 {
+				key := args.String(i)
+				if key == "run_id" {
+					loggedRunID = args.String(i + 1)
+				}
+				if key == "run_name" {
+					loggedRunName = args.String(i + 1)
+				}
+			}
+		}).Return()
+
+		args := &model.CommandArgs{
+			Command:   "/approve new",
+			UserId:    "user123",
+			ChannelId: "channel012",
+			TriggerId: "trigger123",
+		}
+
+		resp, err := router.Route(args)
+
+		// Verify approval creation succeeds
+		assert.NoError(t, err)
+		assert.NotNil(t, resp)
+
+		// Verify playbook context was logged
+		assert.Equal(t, "run123", loggedRunID)
+		assert.Equal(t, "Incident #47 - Database Down", loggedRunName)
+
+		api.AssertExpectations(t)
+		playbooksClient.AssertExpectations(t)
+	})
+
+	t.Run("playbook detection returns 404 - no playbook in channel, continues normally", func(t *testing.T) {
+		api := &plugintest.API{}
+		store := &mockStore{}
+		playbooksClient := &mockPlaybooksClient{}
+		router := NewRouter(api, store, playbooksClient)
+
+		// Mock playbooks client returning nil (404 - no playbook)
+		playbooksClient.On("GetPlaybookRunByChannel", "regular-channel").Return(nil, nil)
+
+		// Mock GetConfig to return site URL
+		siteURL := "https://mattermost.example.com"
+		config := &model.Config{}
+		config.ServiceSettings.SiteURL = &siteURL
+		api.On("GetConfig").Return(config)
+
+		// Mock OpenInteractiveDialog - approval creation should continue
+		api.On("OpenInteractiveDialog", mock.Anything).Return(nil)
+
+		args := &model.CommandArgs{
+			Command:   "/approve new",
+			UserId:    "user123",
+			ChannelId: "regular-channel",
+			TriggerId: "trigger123",
+		}
+
+		resp, err := router.Route(args)
+
+		// Verify approval creation succeeds even without playbook
+		assert.NoError(t, err)
+		assert.NotNil(t, resp)
+
+		api.AssertExpectations(t)
+		playbooksClient.AssertExpectations(t)
+	})
+
+	t.Run("playbook detection fails - logs error but approval creation continues (graceful degradation)", func(t *testing.T) {
+		api := &plugintest.API{}
+		store := &mockStore{}
+		playbooksClient := &mockPlaybooksClient{}
+		router := NewRouter(api, store, playbooksClient)
+
+		// Mock playbooks client returning error
+		playbooksClient.On("GetPlaybookRunByChannel", "channel123").Return(nil, fmt.Errorf("playbooks API returned status 500"))
+
+		// Mock LogWarn - should log the error
+		var loggedError string
+		api.On("LogWarn", "Failed to check for playbook context", mock.Anything, mock.Anything, mock.Anything, mock.Anything).Run(func(args mock.Arguments) {
+			for i := 1; i < len(args); i += 2 {
+				key := args.String(i)
+				if key == "error" {
+					loggedError = args.String(i + 1)
+				}
+			}
+		}).Return()
+
+		// Mock GetConfig to return site URL
+		siteURL := "https://mattermost.example.com"
+		config := &model.Config{}
+		config.ServiceSettings.SiteURL = &siteURL
+		api.On("GetConfig").Return(config)
+
+		// Mock OpenInteractiveDialog - approval creation should STILL continue
+		api.On("OpenInteractiveDialog", mock.Anything).Return(nil)
+
+		args := &model.CommandArgs{
+			Command:   "/approve new",
+			UserId:    "user123",
+			ChannelId: "channel123",
+			TriggerId: "trigger123",
+		}
+
+		resp, err := router.Route(args)
+
+		// Verify approval creation succeeds despite detection error
+		assert.NoError(t, err)
+		assert.NotNil(t, resp)
+
+		// Verify error was logged
+		assert.Contains(t, loggedError, "playbooks API returned status 500")
+
+		api.AssertExpectations(t)
+		playbooksClient.AssertExpectations(t)
+	})
+
+	t.Run("playbooks client is nil - skips detection entirely, approval creation continues", func(t *testing.T) {
+		api := &plugintest.API{}
+		store := &mockStore{}
+		router := NewRouter(api, store, nil) // No playbooks client
+
+		// Mock GetConfig to return site URL
+		siteURL := "https://mattermost.example.com"
+		config := &model.Config{}
+		config.ServiceSettings.SiteURL = &siteURL
+		api.On("GetConfig").Return(config)
+
+		// Mock OpenInteractiveDialog - approval creation should continue
+		api.On("OpenInteractiveDialog", mock.Anything).Return(nil)
+
+		args := &model.CommandArgs{
+			Command:   "/approve new",
+			UserId:    "user123",
+			ChannelId: "channel123",
+			TriggerId: "trigger123",
+		}
+
+		resp, err := router.Route(args)
+
+		// Verify approval creation succeeds without playbook detection
+		assert.NoError(t, err)
+		assert.NotNil(t, resp)
+
+		api.AssertExpectations(t)
+		// No playbooks client assertions - was never called
 	})
 }

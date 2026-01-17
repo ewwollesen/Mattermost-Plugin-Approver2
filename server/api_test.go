@@ -688,6 +688,14 @@ func TestHandleCancelCommand_Integration(t *testing.T) {
 		api.On("EnsureBotUser", mock.AnythingOfType("*model.Bot")).Return("bot123", nil)
 		api.On("RegisterCommand", mock.AnythingOfType("*model.Command")).Return(nil)
 
+		// Mock GetConfig for Playbooks integration (Story 8.1)
+		siteURL := "http://localhost:8065"
+		api.On("GetConfig").Return(&model.Config{
+			ServiceSettings: model.ServiceSettings{
+				SiteURL: &siteURL,
+			},
+		})
+
 		// Create an approval record that will trigger modal
 		record := &approval.ApprovalRecord{
 			ID:          "record-to-cancel",
@@ -765,6 +773,14 @@ func TestHandleCancelCommand_Integration(t *testing.T) {
 		api.On("EnsureBotUser", mock.AnythingOfType("*model.Bot")).Return("bot123", nil)
 		api.On("RegisterCommand", mock.AnythingOfType("*model.Command")).Return(nil)
 
+		// Mock GetConfig for Playbooks integration (Story 8.1)
+		siteURL := "http://localhost:8065"
+		api.On("GetConfig").Return(&model.Config{
+			ServiceSettings: model.ServiceSettings{
+				SiteURL: &siteURL,
+			},
+		})
+
 		// Record already canceled
 		canceledRecord := &approval.ApprovalRecord{
 			ID:          "record456",
@@ -816,6 +832,14 @@ func TestHandleCancelCommand_Integration(t *testing.T) {
 		// Mock plugin activation
 		api.On("EnsureBotUser", mock.AnythingOfType("*model.Bot")).Return("bot123", nil)
 		api.On("RegisterCommand", mock.AnythingOfType("*model.Command")).Return(nil)
+
+		// Mock GetConfig for Playbooks integration (Story 8.1)
+		siteURL := "http://localhost:8065"
+		api.On("GetConfig").Return(&model.Config{
+			ServiceSettings: model.ServiceSettings{
+				SiteURL: &siteURL,
+			},
+		})
 
 		// Record owned by alice123
 		record := &approval.ApprovalRecord{
@@ -871,6 +895,14 @@ func TestHandleCancelCommand_Performance(t *testing.T) {
 		// Mock plugin activation
 		api.On("EnsureBotUser", mock.AnythingOfType("*model.Bot")).Return("bot123", nil)
 		api.On("RegisterCommand", mock.AnythingOfType("*model.Command")).Return(nil)
+
+		// Mock GetConfig for Playbooks integration (Story 8.1)
+		siteURL := "http://localhost:8065"
+		api.On("GetConfig").Return(&model.Config{
+			ServiceSettings: model.ServiceSettings{
+				SiteURL: &siteURL,
+			},
+		})
 
 		// Setup test record
 		record := &approval.ApprovalRecord{

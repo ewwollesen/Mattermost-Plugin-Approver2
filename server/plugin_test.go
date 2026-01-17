@@ -20,6 +20,14 @@ func TestOnActivate(t *testing.T) {
 		api := &plugintest.API{}
 		api.On("EnsureBotUser", mock.AnythingOfType("*model.Bot")).Return("bot123", nil)
 		api.On("RegisterCommand", mock.AnythingOfType("*model.Command")).Return(nil)
+
+		// Mock GetConfig for Playbooks integration (Story 8.1)
+		siteURL := "http://localhost:8065"
+		api.On("GetConfig").Return(&model.Config{
+			ServiceSettings: model.ServiceSettings{
+				SiteURL: &siteURL,
+			},
+		})
 		api.On("LogInfo", mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return()
 
 		p := &Plugin{}
@@ -37,6 +45,14 @@ func TestOnActivate(t *testing.T) {
 		api.On("EnsureBotUser", mock.AnythingOfType("*model.Bot")).Return("bot123", nil)
 		api.On("RegisterCommand", mock.AnythingOfType("*model.Command")).Return(model.NewAppError("test", "test.error", nil, "", 500))
 		api.On("LogInfo", mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return()
+
+		// Mock GetConfig for Playbooks integration (Story 8.1)
+		siteURL := "http://localhost:8065"
+		api.On("GetConfig").Return(&model.Config{
+			ServiceSettings: model.ServiceSettings{
+				SiteURL: &siteURL,
+			},
+		})
 
 		p := &Plugin{}
 		p.SetAPI(api)
@@ -139,6 +155,14 @@ func TestHandleCancelCommand(t *testing.T) {
 		api.On("EnsureBotUser", mock.AnythingOfType("*model.Bot")).Return("bot123", nil)
 		api.On("RegisterCommand", mock.AnythingOfType("*model.Command")).Return(nil)
 
+		// Mock GetConfig for Playbooks integration (Story 8.1)
+		siteURL := "http://localhost:8065"
+		api.On("GetConfig").Return(&model.Config{
+			ServiceSettings: model.ServiceSettings{
+				SiteURL: &siteURL,
+			},
+		})
+
 		// Mock KV store operations for GetByCode
 		api.On("KVGet", "approval:code:A-X7K9Q2").Return([]byte(`"record123"`), nil)
 
@@ -191,6 +215,14 @@ func TestHandleCancelCommand(t *testing.T) {
 		api.On("EnsureBotUser", mock.AnythingOfType("*model.Bot")).Return("bot123", nil)
 		api.On("RegisterCommand", mock.AnythingOfType("*model.Command")).Return(nil)
 
+		// Mock GetConfig for Playbooks integration (Story 8.1)
+		siteURL := "http://localhost:8065"
+		api.On("GetConfig").Return(&model.Config{
+			ServiceSettings: model.ServiceSettings{
+				SiteURL: &siteURL,
+			},
+		})
+
 		// Mock KV store operations
 		api.On("KVGet", "approval:code:A-X7K9Q2").Return([]byte(`"record123"`), nil)
 
@@ -239,6 +271,14 @@ func TestHandleCancelCommand(t *testing.T) {
 		api.On("EnsureBotUser", mock.AnythingOfType("*model.Bot")).Return("bot123", nil)
 		api.On("RegisterCommand", mock.AnythingOfType("*model.Command")).Return(nil)
 
+		// Mock GetConfig for Playbooks integration (Story 8.1)
+		siteURL := "http://localhost:8065"
+		api.On("GetConfig").Return(&model.Config{
+			ServiceSettings: model.ServiceSettings{
+				SiteURL: &siteURL,
+			},
+		})
+
 		// Mock KV store operations
 		api.On("KVGet", "approval:code:A-X7K9Q2").Return([]byte(`"record123"`), nil)
 
@@ -286,6 +326,14 @@ func TestHandleCancelCommand(t *testing.T) {
 		// Mock plugin activation
 		api.On("EnsureBotUser", mock.AnythingOfType("*model.Bot")).Return("bot123", nil)
 		api.On("RegisterCommand", mock.AnythingOfType("*model.Command")).Return(nil)
+
+		// Mock GetConfig for Playbooks integration (Story 8.1)
+		siteURL := "http://localhost:8065"
+		api.On("GetConfig").Return(&model.Config{
+			ServiceSettings: model.ServiceSettings{
+				SiteURL: &siteURL,
+			},
+		})
 
 		// Mock KV store operations - code not found
 		api.On("KVGet", "approval:code:Z-NOTFND").Return(nil, nil)
@@ -346,6 +394,14 @@ func TestHandleCancelCommand(t *testing.T) {
 		// Mock plugin activation
 		api.On("EnsureBotUser", mock.AnythingOfType("*model.Bot")).Return("bot123", nil)
 		api.On("RegisterCommand", mock.AnythingOfType("*model.Command")).Return(nil)
+
+		// Mock GetConfig for Playbooks integration (Story 8.1)
+		siteURL := "http://localhost:8065"
+		api.On("GetConfig").Return(&model.Config{
+			ServiceSettings: model.ServiceSettings{
+				SiteURL: &siteURL,
+			},
+		})
 
 		// Mock KV lookup for non-existent code (returns nil = not found)
 		api.On("KVGet", "approval:code:A-NOTFND").Return(nil, nil)
@@ -424,6 +480,14 @@ func TestHandleVerifyCommand(t *testing.T) {
 		api.On("EnsureBotUser", mock.AnythingOfType("*model.Bot")).Return("bot123", nil)
 		api.On("RegisterCommand", mock.AnythingOfType("*model.Command")).Return(nil)
 
+		// Mock GetConfig for Playbooks integration (Story 8.1)
+		siteURL := "http://localhost:8065"
+		api.On("GetConfig").Return(&model.Config{
+			ServiceSettings: model.ServiceSettings{
+				SiteURL: &siteURL,
+			},
+		})
+
 		// Mock KV store operations
 		api.On("KVGet", "approval:code:A-X7K9Q2").Return([]byte(`"record123"`), nil)
 
@@ -472,6 +536,14 @@ func TestHandleVerifyCommand(t *testing.T) {
 		api.On("EnsureBotUser", mock.AnythingOfType("*model.Bot")).Return("bot123", nil)
 		api.On("RegisterCommand", mock.AnythingOfType("*model.Command")).Return(nil)
 
+		// Mock GetConfig for Playbooks integration (Story 8.1)
+		siteURL := "http://localhost:8065"
+		api.On("GetConfig").Return(&model.Config{
+			ServiceSettings: model.ServiceSettings{
+				SiteURL: &siteURL,
+			},
+		})
+
 		// Mock KV store operations
 		api.On("KVGet", "approval:code:A-X7K9Q2").Return([]byte(`"record123"`), nil)
 
@@ -519,6 +591,14 @@ func TestHandleVerifyCommand(t *testing.T) {
 		api.On("EnsureBotUser", mock.AnythingOfType("*model.Bot")).Return("bot123", nil)
 		api.On("RegisterCommand", mock.AnythingOfType("*model.Command")).Return(nil)
 
+		// Mock GetConfig for Playbooks integration (Story 8.1)
+		siteURL := "http://localhost:8065"
+		api.On("GetConfig").Return(&model.Config{
+			ServiceSettings: model.ServiceSettings{
+				SiteURL: &siteURL,
+			},
+		})
+
 		// Mock KV store operations
 		api.On("KVGet", "approval:code:A-X7K9Q2").Return([]byte(`"record123"`), nil)
 
@@ -564,6 +644,14 @@ func TestHandleVerifyCommand(t *testing.T) {
 		// Mock plugin activation
 		api.On("EnsureBotUser", mock.AnythingOfType("*model.Bot")).Return("bot123", nil)
 		api.On("RegisterCommand", mock.AnythingOfType("*model.Command")).Return(nil)
+
+		// Mock GetConfig for Playbooks integration (Story 8.1)
+		siteURL := "http://localhost:8065"
+		api.On("GetConfig").Return(&model.Config{
+			ServiceSettings: model.ServiceSettings{
+				SiteURL: &siteURL,
+			},
+		})
 
 		// Mock KV store operations - code not found
 		api.On("KVGet", "approval:code:A-NOTFND").Return(nil, nil)
@@ -766,6 +854,15 @@ func TestHandleAction(t *testing.T) {
 			api := &plugintest.API{}
 			api.On("EnsureBotUser", mock.AnythingOfType("*model.Bot")).Return("bot123", nil)
 			api.On("RegisterCommand", mock.AnythingOfType("*model.Command")).Return(nil)
+
+			// Mock GetConfig for Playbooks integration (Story 8.1)
+			siteURL := "http://localhost:8065"
+			api.On("GetConfig").Return(&model.Config{
+				ServiceSettings: model.ServiceSettings{
+					SiteURL: &siteURL,
+				},
+			})
+
 			api.On("LogInfo", mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything).Maybe().Return()
 			api.On("LogError", mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything).Maybe().Return()
 

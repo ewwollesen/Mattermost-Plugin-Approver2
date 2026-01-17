@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/mattermost/mattermost-plugin-approver2/server/approval"
+	"github.com/mattermost/mattermost-plugin-approver2/server/playbooks"
 	"github.com/mattermost/mattermost/server/public/model"
 	"github.com/mattermost/mattermost/server/public/plugin"
 )
@@ -20,17 +21,24 @@ type Storer interface {
 	GetApprovalByCode(code string) (*approval.ApprovalRecord, error)
 }
 
+// PlaybooksClientInterface defines methods for interacting with Playbooks plugin
+type PlaybooksClientInterface interface {
+	GetPlaybookRunByChannel(channelID string) (*playbooks.PlaybookRun, error)
+}
+
 // Router routes slash command invocations to appropriate handlers
 type Router struct {
-	api   plugin.API
-	store Storer
+	api             plugin.API
+	store           Storer
+	playbooksClient PlaybooksClientInterface
 }
 
 // NewRouter creates a new command router
-func NewRouter(api plugin.API, store Storer) *Router {
+func NewRouter(api plugin.API, store Storer, playbooksClient PlaybooksClientInterface) *Router {
 	return &Router{
-		api:   api,
-		store: store,
+		api:             api,
+		store:           store,
+		playbooksClient: playbooksClient,
 	}
 }
 
@@ -120,6 +128,23 @@ func executeUnknown(subcommand string) *model.CommandResponse {
 
 // executeNew opens an interactive dialog for creating a new approval request
 func (r *Router) executeNew(args *model.CommandArgs) (*model.CommandResponse, error) {
+	// Check if this channel has an active playbook run (Story 8.1)
+	if r.playbooksClient != nil {
+		run, err := r.playbooksClient.GetPlaybookRunByChannel(args.ChannelId)
+		if err != nil {
+			// Log error but continue with approval creation (graceful degradation)
+			r.api.LogWarn("Failed to check for playbook context",
+				"channel_id", args.ChannelId,
+				"error", err.Error())
+		} else if run != nil {
+			r.api.LogDebug("Detected playbook context",
+				"run_id", run.ID,
+				"run_name", run.Name,
+				"channel_id", args.ChannelId)
+			// Note: run will be stored in approval record in Story 8.2
+		}
+	}
+
 	// Validate trigger ID is present
 	if args.TriggerId == "" {
 		return &model.CommandResponse{
