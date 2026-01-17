@@ -58,6 +58,7 @@ func SendApprovalRequestDM(api plugin.API, botUserID string, record *approval.Ap
 						// Approve button (green/primary style)
 						map[string]any{
 							"name": "Approve",
+							"type": "button",
 							"integration": map[string]any{
 								"url": "/plugins/com.mattermost.plugin-approver2/action",
 								"context": map[string]any{
@@ -70,6 +71,7 @@ func SendApprovalRequestDM(api plugin.API, botUserID string, record *approval.Ap
 						// Deny button (red/danger style)
 						map[string]any{
 							"name": "Deny",
+							"type": "button",
 							"integration": map[string]any{
 								"url": "/plugins/com.mattermost.plugin-approver2/action",
 								"context": map[string]any{

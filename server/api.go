@@ -516,7 +516,7 @@ func (p *Plugin) handleConfirmDecision(payload *model.SubmitDialogRequest) *mode
 			"suggestion", suggestion,
 		)
 	} else {
-		// Success - update OutcomeNotified flag (also best effort)
+		// Success - log outcome notification sent
 		p.API.LogInfo("Outcome notification sent",
 			"approval_id", approvalID,
 			"code", updatedRecord.Code,
@@ -524,14 +524,9 @@ func (p *Plugin) handleConfirmDecision(payload *model.SubmitDialogRequest) *mode
 			"requester_id", updatedRecord.RequesterID,
 			"post_id", postID,
 		)
-		updatedRecord.OutcomeNotified = true
-		if flagErr := p.store.SaveApproval(updatedRecord); flagErr != nil {
-			p.API.LogError("Failed to update OutcomeNotified flag",
-				"approval_id", approvalID,
-				"error", flagErr.Error(),
-			)
-			// Continue anyway - notification was sent successfully
-		}
+		// Note: OutcomeNotified flag cannot be updated after decision is recorded
+		// because the approval record is immutable. The notification was sent
+		// successfully, which is what matters (graceful degradation by design).
 	}
 
 	// Disable buttons in original DM notification (best effort)

@@ -1987,11 +1987,11 @@ func TestSendRequesterCancellationNotificationDM(t *testing.T) {
 
 		record := &approval.ApprovalRecord{
 			ID:               "record123",
-			Code:             "",             // Empty optional
-			Description:      "",             // Empty optional
+			Code:             "", // Empty optional
+			Description:      "", // Empty optional
 			RequesterID:      requesterID,
-			ApproverUsername: "",             // Empty optional
-			CanceledReason:   "",             // Empty optional
+			ApproverUsername: "", // Empty optional
+			CanceledReason:   "", // Empty optional
 			CanceledAt:       1704931300000,
 		}
 
