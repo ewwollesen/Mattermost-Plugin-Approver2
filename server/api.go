@@ -194,6 +194,30 @@ func (p *Plugin) handleApproveNew(payload *model.SubmitDialogRequest) *model.Sub
 		}
 	}
 
+	// Story 8.2: Detect and populate playbook context (if available)
+	// Uses requester's user context for authentication to respect Playbooks permissions
+	if p.playbooksClient != nil {
+		run, pbErr := p.playbooksClient.GetPlaybookRunByChannel(payload.ChannelId, payload.UserId)
+		if pbErr != nil {
+			// Log warning but continue - playbook detection is best effort
+			p.API.LogWarn("Failed to detect playbook context during approval creation",
+				"channel_id", payload.ChannelId,
+				"approval_id", record.ID,
+				"user_id", payload.UserId,
+				"error", pbErr.Error())
+		} else if run != nil {
+			// Populate playbook fields
+			record.PlaybookRunID = run.ID
+			record.PlaybookName = run.Name
+			record.PlaybookChannelID = run.ChannelID
+			// PlaybookPostID will be set in Story 8.3 when posting to playbook channel
+			p.API.LogDebug("Playbook context detected for approval",
+				"approval_id", record.ID,
+				"playbook_run_id", run.ID,
+				"playbook_name", run.Name)
+		}
+	}
+
 	// Task 4 (AC5): Handle KV Store Unavailability with proper error wrapping
 	err = kvStore.SaveApproval(record)
 	if err != nil {

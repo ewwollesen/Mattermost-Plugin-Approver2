@@ -21,20 +21,15 @@ type Storer interface {
 	GetApprovalByCode(code string) (*approval.ApprovalRecord, error)
 }
 
-// PlaybooksClientInterface defines methods for interacting with Playbooks plugin
-type PlaybooksClientInterface interface {
-	GetPlaybookRunByChannel(channelID string) (*playbooks.PlaybookRun, error)
-}
-
 // Router routes slash command invocations to appropriate handlers
 type Router struct {
 	api             plugin.API
 	store           Storer
-	playbooksClient PlaybooksClientInterface
+	playbooksClient playbooks.ClientInterface
 }
 
 // NewRouter creates a new command router
-func NewRouter(api plugin.API, store Storer, playbooksClient PlaybooksClientInterface) *Router {
+func NewRouter(api plugin.API, store Storer, playbooksClient playbooks.ClientInterface) *Router {
 	return &Router{
 		api:             api,
 		store:           store,
@@ -129,12 +124,14 @@ func executeUnknown(subcommand string) *model.CommandResponse {
 // executeNew opens an interactive dialog for creating a new approval request
 func (r *Router) executeNew(args *model.CommandArgs) (*model.CommandResponse, error) {
 	// Check if this channel has an active playbook run (Story 8.1)
+	// Uses requester's user context for proper permission checking
 	if r.playbooksClient != nil {
-		run, err := r.playbooksClient.GetPlaybookRunByChannel(args.ChannelId)
+		run, err := r.playbooksClient.GetPlaybookRunByChannel(args.ChannelId, args.UserId)
 		if err != nil {
 			// Log error but continue with approval creation (graceful degradation)
 			r.api.LogWarn("Failed to check for playbook context",
 				"channel_id", args.ChannelId,
+				"user_id", args.UserId,
 				"error", err.Error())
 		} else if run != nil {
 			r.api.LogDebug("Detected playbook context",
@@ -924,6 +921,19 @@ func formatRecordDetail(record *approval.ApprovalRecord) string {
 		}
 
 		output.WriteString("\n") // Spacing before next section
+	}
+
+	// Playbook Context section (Story 8.2: AC5)
+	if record.PlaybookRunID != "" {
+		output.WriteString("\n**🎯 Playbook Context:**\n")
+		output.WriteString(fmt.Sprintf("- Name: %s\n", record.PlaybookName))
+		if record.PlaybookChannelID != "" {
+			output.WriteString(fmt.Sprintf("- Channel ID: %s\n", record.PlaybookChannelID))
+		}
+		if record.PlaybookPostID != "" {
+			output.WriteString(fmt.Sprintf("- Status Post ID: %s\n", record.PlaybookPostID))
+		}
+		output.WriteString(fmt.Sprintf("- Playbook Run ID: %s\n", record.PlaybookRunID))
 	}
 
 	// Context section (AC3)

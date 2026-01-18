@@ -28,6 +28,7 @@ func TestOnActivate(t *testing.T) {
 				SiteURL: &siteURL,
 			},
 		})
+
 		api.On("LogInfo", mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return()
 
 		p := &Plugin{}

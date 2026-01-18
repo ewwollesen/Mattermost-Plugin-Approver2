@@ -7,12 +7,29 @@ import (
 	"time"
 
 	"github.com/mattermost/mattermost-plugin-approver2/server/approval"
+	"github.com/mattermost/mattermost-plugin-approver2/server/playbooks"
 	"github.com/mattermost/mattermost-plugin-approver2/server/store"
 	"github.com/mattermost/mattermost/server/public/model"
 	"github.com/mattermost/mattermost/server/public/plugin/plugintest"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
 )
+
+// MockPlaybooksClient is a mock implementation of playbooks.ClientInterface for testing
+type MockPlaybooksClient struct {
+	mock.Mock
+}
+
+func (m *MockPlaybooksClient) GetPlaybookRunByChannel(channelID string, requesterUserID string) (*playbooks.PlaybookRun, error) {
+	args := m.Called(channelID, requesterUserID)
+	if run := args.Get(0); run != nil {
+		return run.(*playbooks.PlaybookRun), args.Error(1)
+	}
+	return nil, args.Error(1)
+}
+
+// PlaybookRun type alias for test convenience
+type PlaybookRun = playbooks.PlaybookRun
 
 func TestHandleApproveNew_EphemeralConfirmation(t *testing.T) {
 	t.Run("ephemeral confirmation sent with correct format", func(t *testing.T) {
@@ -696,6 +713,10 @@ func TestHandleCancelCommand_Integration(t *testing.T) {
 			},
 		})
 
+		api.On("LogInfo", mock.Anything, mock.Anything, mock.Anything).Maybe()
+		api.On("LogDebug", mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything).Maybe()
+		api.On("LogWarn", mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything).Maybe()
+
 		// Create an approval record that will trigger modal
 		record := &approval.ApprovalRecord{
 			ID:          "record-to-cancel",
@@ -781,6 +802,11 @@ func TestHandleCancelCommand_Integration(t *testing.T) {
 			},
 		})
 
+		// Mock bot token creation (Story 8.2)
+		api.On("LogInfo", mock.Anything, mock.Anything, mock.Anything).Maybe()
+		api.On("LogDebug", mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything).Maybe()
+		api.On("LogWarn", mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything).Maybe()
+
 		// Record already canceled
 		canceledRecord := &approval.ApprovalRecord{
 			ID:          "record456",
@@ -840,6 +866,11 @@ func TestHandleCancelCommand_Integration(t *testing.T) {
 				SiteURL: &siteURL,
 			},
 		})
+
+		// Mock bot token creation (Story 8.2)
+		api.On("LogInfo", mock.Anything, mock.Anything, mock.Anything).Maybe()
+		api.On("LogDebug", mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything).Maybe()
+		api.On("LogWarn", mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything).Maybe()
 
 		// Record owned by alice123
 		record := &approval.ApprovalRecord{
@@ -903,6 +934,11 @@ func TestHandleCancelCommand_Performance(t *testing.T) {
 				SiteURL: &siteURL,
 			},
 		})
+
+		// Mock bot token creation (Story 8.2)
+		api.On("LogInfo", mock.Anything, mock.Anything, mock.Anything).Maybe()
+		api.On("LogDebug", mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything).Maybe()
+		api.On("LogWarn", mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything).Maybe()
 
 		// Setup test record
 		record := &approval.ApprovalRecord{
@@ -1634,5 +1670,196 @@ func TestDisableButtonsInDM(t *testing.T) {
 		// Note: AC4 (log error but don't fail operation) is implemented at caller level
 		// (handleConfirmDecision:538-544). This function correctly returns an error
 		// that the caller logs with LogWarn and continues processing.
+	})
+}
+
+// TestHandleApproveNew_PlaybookContext tests Story 8.2: playbook metadata detection and storage
+func TestHandleApproveNew_PlaybookContext(t *testing.T) {
+	t.Run("stores playbook metadata when playbook detected", func(t *testing.T) {
+		// Setup
+		api := &plugintest.API{}
+		plugin := &Plugin{}
+		plugin.SetAPI(api)
+		plugin.botUserID = "bot123"
+
+		// Mock playbooks client
+		mockPlaybooksClient := &MockPlaybooksClient{}
+		mockPlaybooksClient.On("GetPlaybookRunByChannel", "channel123", "req123").Return(&PlaybookRun{
+			ID:        "playbook_run_456",
+			Name:      "Incident #47",
+			ChannelID: "channel123",
+		}, nil)
+		plugin.playbooksClient = mockPlaybooksClient
+
+		// Mock users
+		requester := &model.User{Id: "req123", Username: "alice", FirstName: "Alice", LastName: "Smith"}
+		approver := &model.User{Id: "app456", Username: "bob", FirstName: "Bob", LastName: "Jones"}
+		api.On("GetUser", "req123").Return(requester, nil)
+		api.On("GetUser", "app456").Return(approver, nil)
+
+		// Mock KV store
+		var savedRecord *approval.ApprovalRecord
+		api.On("KVGet", mock.Anything).Return(nil, nil)
+		api.On("KVSet", mock.Anything, mock.Anything).Run(func(args mock.Arguments) {
+			if key, ok := args.Get(0).(string); ok && strings.HasPrefix(key, "approval:record:") {
+				data := args.Get(1).([]byte)
+				var record approval.ApprovalRecord
+				_ = json.Unmarshal(data, &record)
+				savedRecord = &record
+			}
+		}).Return(nil)
+
+		// Mock notifications
+		api.On("GetDirectChannel", "bot123", "app456").Return(&model.Channel{Id: "dm_channel"}, nil)
+		api.On("CreatePost", mock.Anything).Return(&model.Post{}, nil)
+		api.On("SendEphemeralPost", "req123", mock.Anything).Return(&model.Post{})
+		api.On("LogInfo", mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything).Maybe()
+		api.On("LogDebug", mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything).Maybe()
+		api.On("LogWarn", mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything).Maybe()
+
+		payload := &model.SubmitDialogRequest{
+			UserId:    "req123",
+			ChannelId: "channel123",
+			TeamId:    "team789",
+			Submission: map[string]any{
+				"approver":    "app456",
+				"description": "Test approval",
+			},
+		}
+
+		// Execute
+		response := plugin.handleApproveNew(payload)
+
+		// Verify
+		assert.NotNil(t, response)
+		assert.Empty(t, response.Error)
+		assert.NotNil(t, savedRecord)
+		assert.Equal(t, "playbook_run_456", savedRecord.PlaybookRunID)
+		assert.Equal(t, "Incident #47", savedRecord.PlaybookName)
+		assert.Equal(t, "channel123", savedRecord.PlaybookChannelID)
+		assert.Empty(t, savedRecord.PlaybookPostID) // Will be set in Story 8.3
+		mockPlaybooksClient.AssertExpectations(t)
+		api.AssertExpectations(t)
+	})
+
+	t.Run("leaves playbook fields empty when no playbook detected", func(t *testing.T) {
+		// Setup
+		api := &plugintest.API{}
+		plugin := &Plugin{}
+		plugin.SetAPI(api)
+		plugin.botUserID = "bot123"
+
+		// Mock playbooks client - returns nil (no playbook)
+		mockPlaybooksClient := &MockPlaybooksClient{}
+		mockPlaybooksClient.On("GetPlaybookRunByChannel", "channel123", "req123").Return(nil, nil)
+		plugin.playbooksClient = mockPlaybooksClient
+
+		// Mock users
+		requester := &model.User{Id: "req123", Username: "alice", FirstName: "Alice", LastName: "Smith"}
+		approver := &model.User{Id: "app456", Username: "bob", FirstName: "Bob", LastName: "Jones"}
+		api.On("GetUser", "req123").Return(requester, nil)
+		api.On("GetUser", "app456").Return(approver, nil)
+
+		// Mock KV store
+		var savedRecord *approval.ApprovalRecord
+		api.On("KVGet", mock.Anything).Return(nil, nil)
+		api.On("KVSet", mock.Anything, mock.Anything).Run(func(args mock.Arguments) {
+			if key, ok := args.Get(0).(string); ok && strings.HasPrefix(key, "approval:record:") {
+				data := args.Get(1).([]byte)
+				var record approval.ApprovalRecord
+				_ = json.Unmarshal(data, &record)
+				savedRecord = &record
+			}
+		}).Return(nil)
+
+		// Mock notifications
+		api.On("GetDirectChannel", "bot123", "app456").Return(&model.Channel{Id: "dm_channel"}, nil)
+		api.On("CreatePost", mock.Anything).Return(&model.Post{}, nil)
+		api.On("SendEphemeralPost", "req123", mock.Anything).Return(&model.Post{})
+		api.On("LogInfo", mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything).Maybe()
+		api.On("LogWarn", mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything).Maybe()
+
+		payload := &model.SubmitDialogRequest{
+			UserId:    "req123",
+			ChannelId: "channel123",
+			TeamId:    "team789",
+			Submission: map[string]any{
+				"approver":    "app456",
+				"description": "Test approval",
+			},
+		}
+
+		// Execute
+		response := plugin.handleApproveNew(payload)
+
+		// Verify
+		assert.NotNil(t, response)
+		assert.Empty(t, response.Error)
+		assert.NotNil(t, savedRecord)
+		assert.Empty(t, savedRecord.PlaybookRunID)
+		assert.Empty(t, savedRecord.PlaybookName)
+		assert.Empty(t, savedRecord.PlaybookChannelID)
+		assert.Empty(t, savedRecord.PlaybookPostID)
+		mockPlaybooksClient.AssertExpectations(t)
+		api.AssertExpectations(t)
+	})
+
+	t.Run("continues when playbook detection fails (graceful degradation)", func(t *testing.T) {
+		// Setup
+		api := &plugintest.API{}
+		plugin := &Plugin{}
+		plugin.SetAPI(api)
+		plugin.botUserID = "bot123"
+
+		// Mock playbooks client - returns error
+		mockPlaybooksClient := &MockPlaybooksClient{}
+		mockPlaybooksClient.On("GetPlaybookRunByChannel", "channel123", "req123").Return(nil, assert.AnError)
+		plugin.playbooksClient = mockPlaybooksClient
+
+		// Mock users
+		requester := &model.User{Id: "req123", Username: "alice", FirstName: "Alice", LastName: "Smith"}
+		approver := &model.User{Id: "app456", Username: "bob", FirstName: "Bob", LastName: "Jones"}
+		api.On("GetUser", "req123").Return(requester, nil)
+		api.On("GetUser", "app456").Return(approver, nil)
+
+		// Mock KV store
+		var savedRecord *approval.ApprovalRecord
+		api.On("KVGet", mock.Anything).Return(nil, nil)
+		api.On("KVSet", mock.Anything, mock.Anything).Run(func(args mock.Arguments) {
+			if key, ok := args.Get(0).(string); ok && strings.HasPrefix(key, "approval:record:") {
+				data := args.Get(1).([]byte)
+				var record approval.ApprovalRecord
+				_ = json.Unmarshal(data, &record)
+				savedRecord = &record
+			}
+		}).Return(nil)
+
+		// Mock notifications
+		api.On("GetDirectChannel", "bot123", "app456").Return(&model.Channel{Id: "dm_channel"}, nil)
+		api.On("CreatePost", mock.Anything).Return(&model.Post{}, nil)
+		api.On("SendEphemeralPost", "req123", mock.Anything).Return(&model.Post{})
+		api.On("LogInfo", mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything).Maybe()
+		api.On("LogWarn", mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything).Maybe()
+
+		payload := &model.SubmitDialogRequest{
+			UserId:    "req123",
+			ChannelId: "channel123",
+			TeamId:    "team789",
+			Submission: map[string]any{
+				"approver":    "app456",
+				"description": "Test approval",
+			},
+		}
+
+		// Execute
+		response := plugin.handleApproveNew(payload)
+
+		// Verify - approval should still succeed
+		assert.NotNil(t, response)
+		assert.Empty(t, response.Error)
+		assert.NotNil(t, savedRecord)
+		assert.Empty(t, savedRecord.PlaybookRunID) // Empty due to error
+		mockPlaybooksClient.AssertExpectations(t)
+		api.AssertExpectations(t)
 	})
 }

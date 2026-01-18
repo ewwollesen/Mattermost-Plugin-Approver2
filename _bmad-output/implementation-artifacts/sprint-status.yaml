@@ -105,7 +105,7 @@ development_status:
   # Epic 8: Playbook Integration
   epic-8: in-progress
   8-1-playbook-context-detection: review
-  8-2-data-model-extension-playbook-metadata: ready-for-dev
+  8-2-data-model-extension-playbook-metadata: done
   8-3-post-status-messages-playbook-channel: ready-for-dev
   8-4-add-playbook-context-approver-dms: ready-for-dev
   8-5-update-playbook-channel-status-changes: ready-for-dev

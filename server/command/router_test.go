@@ -2483,13 +2483,13 @@ func TestFormatRecordDetail_Verification(t *testing.T) {
 // Story 8.1: Integration tests for playbook context detection
 // These tests verify that playbook detection integrates correctly with the /approve new flow
 
-// mockPlaybooksClient is a mock implementation of PlaybooksClientInterface
+// mockPlaybooksClient is a mock implementation of playbooks.ClientInterface
 type mockPlaybooksClient struct {
 	mock.Mock
 }
 
-func (m *mockPlaybooksClient) GetPlaybookRunByChannel(channelID string) (*playbooks.PlaybookRun, error) {
-	args := m.Called(channelID)
+func (m *mockPlaybooksClient) GetPlaybookRunByChannel(channelID string, requesterUserID string) (*playbooks.PlaybookRun, error) {
+	args := m.Called(channelID, requesterUserID)
 	if args.Get(0) == nil {
 		return nil, args.Error(1)
 	}
@@ -2515,7 +2515,7 @@ func TestExecuteNew_PlaybookIntegration(t *testing.T) {
 			EndAt:       0,
 			PlaybookID:  "playbook345",
 		}
-		playbooksClient.On("GetPlaybookRunByChannel", "channel012").Return(run, nil)
+		playbooksClient.On("GetPlaybookRunByChannel", "channel012", "user123").Return(run, nil)
 
 		// Mock GetConfig to return site URL
 		siteURL := "https://mattermost.example.com"
@@ -2569,7 +2569,7 @@ func TestExecuteNew_PlaybookIntegration(t *testing.T) {
 		router := NewRouter(api, store, playbooksClient)
 
 		// Mock playbooks client returning nil (404 - no playbook)
-		playbooksClient.On("GetPlaybookRunByChannel", "regular-channel").Return(nil, nil)
+		playbooksClient.On("GetPlaybookRunByChannel", "regular-channel", "user123").Return(nil, nil)
 
 		// Mock GetConfig to return site URL
 		siteURL := "https://mattermost.example.com"
@@ -2604,11 +2604,11 @@ func TestExecuteNew_PlaybookIntegration(t *testing.T) {
 		router := NewRouter(api, store, playbooksClient)
 
 		// Mock playbooks client returning error
-		playbooksClient.On("GetPlaybookRunByChannel", "channel123").Return(nil, fmt.Errorf("playbooks API returned status 500"))
+		playbooksClient.On("GetPlaybookRunByChannel", "channel123", "user123").Return(nil, fmt.Errorf("playbooks API returned status 500"))
 
-		// Mock LogWarn - should log the error
+		// Mock LogWarn - should log the error (now includes user_id)
 		var loggedError string
-		api.On("LogWarn", "Failed to check for playbook context", mock.Anything, mock.Anything, mock.Anything, mock.Anything).Run(func(args mock.Arguments) {
+		api.On("LogWarn", "Failed to check for playbook context", mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything).Run(func(args mock.Arguments) {
 			for i := 1; i < len(args); i += 2 {
 				key := args.String(i)
 				if key == "error" {
@@ -2675,5 +2675,96 @@ func TestExecuteNew_PlaybookIntegration(t *testing.T) {
 
 		api.AssertExpectations(t)
 		// No playbooks client assertions - was never called
+	})
+}
+
+// Story 8.2: Tests for formatRecordDetail with playbook context
+func TestFormatRecordDetail_PlaybookContext(t *testing.T) {
+	t.Run("displays playbook context when present", func(t *testing.T) {
+		record := &approval.ApprovalRecord{
+			ID:                   "abc123",
+			Code:                 "A-TEST1",
+			RequesterID:          "req123",
+			RequesterUsername:    "alice",
+			RequesterDisplayName: "Alice Smith",
+			ApproverID:           "app456",
+			ApproverUsername:     "bob",
+			ApproverDisplayName:  "Bob Jones",
+			Description:          "Test approval",
+			Status:               approval.StatusPending,
+			CreatedAt:            1704931200000,
+			RequestChannelID:     "channel123",
+			TeamID:               "team456",
+			// Playbook fields
+			PlaybookRunID:     "playbook_run_789",
+			PlaybookName:      "Incident #47",
+			PlaybookChannelID: "pb_channel_123",
+			PlaybookPostID:    "post_456",
+		}
+
+		result := formatRecordDetail(record)
+
+		// Verify playbook context section exists
+		assert.Contains(t, result, "**🎯 Playbook Context:**")
+		assert.Contains(t, result, "- Name: Incident #47")
+		assert.Contains(t, result, "- Channel ID: pb_channel_123")
+		assert.Contains(t, result, "- Status Post ID: post_456")
+		assert.Contains(t, result, "- Playbook Run ID: playbook_run_789")
+	})
+
+	t.Run("omits playbook context when not present", func(t *testing.T) {
+		record := &approval.ApprovalRecord{
+			ID:                   "abc123",
+			Code:                 "A-TEST2",
+			RequesterID:          "req123",
+			RequesterUsername:    "alice",
+			RequesterDisplayName: "Alice Smith",
+			ApproverID:           "app456",
+			ApproverUsername:     "bob",
+			ApproverDisplayName:  "Bob Jones",
+			Description:          "Test approval",
+			Status:               approval.StatusPending,
+			CreatedAt:            1704931200000,
+			RequestChannelID:     "channel123",
+			TeamID:               "team456",
+			// Playbook fields empty
+		}
+
+		result := formatRecordDetail(record)
+
+		// Verify playbook context section does NOT exist
+		assert.NotContains(t, result, "**🎯 Playbook Context:**")
+		assert.NotContains(t, result, "Playbook Run ID:")
+	})
+
+	t.Run("handles partial playbook context gracefully", func(t *testing.T) {
+		record := &approval.ApprovalRecord{
+			ID:                   "abc123",
+			Code:                 "A-TEST3",
+			RequesterID:          "req123",
+			RequesterUsername:    "alice",
+			RequesterDisplayName: "Alice Smith",
+			ApproverID:           "app456",
+			ApproverUsername:     "bob",
+			ApproverDisplayName:  "Bob Jones",
+			Description:          "Test approval",
+			Status:               approval.StatusPending,
+			CreatedAt:            1704931200000,
+			RequestChannelID:     "channel123",
+			TeamID:               "team456",
+			// Partial playbook fields (no post ID yet - Story 8.3 not done)
+			PlaybookRunID:     "playbook_run_789",
+			PlaybookName:      "Incident #47",
+			PlaybookChannelID: "pb_channel_123",
+		}
+
+		result := formatRecordDetail(record)
+
+		// Verify playbook context section exists
+		assert.Contains(t, result, "**🎯 Playbook Context:**")
+		assert.Contains(t, result, "- Name: Incident #47")
+		assert.Contains(t, result, "- Channel ID: pb_channel_123")
+		assert.NotContains(t, result, "- Status Post ID:") // Should not appear when empty
+		assert.Contains(t, result, "- Playbook Run ID: playbook_run_789")
 	})
 }

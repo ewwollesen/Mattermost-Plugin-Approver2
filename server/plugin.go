@@ -39,7 +39,7 @@ type Plugin struct {
 	botUserID string
 
 	// playbooksClient handles communication with Mattermost Playbooks plugin
-	playbooksClient *playbooks.Client
+	playbooksClient playbooks.ClientInterface
 }
 
 // OnActivate is called when the plugin is activated.
@@ -67,14 +67,11 @@ func (p *Plugin) OnActivate() error {
 	p.timeoutChecker = timeout.NewChecker(p.store, p.service, p.API, botID)
 	p.timeoutChecker.Start()
 
-	// Initialize Playbooks integration (Story 8.1)
-	// Note: Bot token authentication will be implemented in Story 8.6
+	// Initialize Playbooks integration (Story 8.2: user-context authentication)
 	siteURL := p.API.GetConfig().ServiceSettings.SiteURL
 	if siteURL != nil && *siteURL != "" {
-		// TODO: Implement proper bot token authentication in Story 8.6
-		// For now, use empty token (Playbooks plugin may allow plugin-to-plugin calls)
-		p.playbooksClient = playbooks.NewClient(p.API, *siteURL, "")
-		p.API.LogInfo("Playbooks integration initialized")
+		p.playbooksClient = playbooks.NewClient(p.API, *siteURL)
+		p.API.LogInfo("Playbooks integration initialized with user-context authentication")
 	} else {
 		p.API.LogWarn("Site URL not configured, Playbooks integration disabled")
 	}

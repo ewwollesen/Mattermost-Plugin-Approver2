@@ -50,6 +50,12 @@ type ApprovalRecord struct {
 	NotificationPostID string `json:"notificationPostId,omitempty"` // Post ID of the DM notification with buttons
 	OutcomeNotified    bool   `json:"outcomeNotified"`
 
+	// Playbook Integration fields (v2.0 - Epic 8)
+	PlaybookRunID     string `json:"playbookRunId,omitempty"`     // ID of the associated playbook run
+	PlaybookName      string `json:"playbookName,omitempty"`      // Display name of the playbook run
+	PlaybookChannelID string `json:"playbookChannelId,omitempty"` // Channel where playbook is running
+	PlaybookPostID    string `json:"playbookPostId,omitempty"`    // Post ID in playbook channel where status was posted
+
 	// Schema versioning
 	SchemaVersion int `json:"schemaVersion"`
 }
