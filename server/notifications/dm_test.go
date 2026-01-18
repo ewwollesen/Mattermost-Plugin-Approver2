@@ -2002,5 +2002,337 @@ func TestSendRequesterCancellationNotificationDM(t *testing.T) {
 	})
 }
 
+// Story 8.4: Tests for formatPlaybookContext
+func TestFormatPlaybookContext(t *testing.T) {
+	t.Run("formats playbook context with all fields", func(t *testing.T) {
+		api := &plugintest.API{}
+		api.On("GetChannel", "channel456").Return(&model.Channel{
+			Id:   "channel456",
+			Name: "deploy-prod-v2-1-0",
+		}, nil)
+
+		record := &approval.ApprovalRecord{
+			PlaybookRunID:     "run123",
+			PlaybookName:      "Deploy - Production Release v2.1.0",
+			PlaybookChannelID: "channel456",
+		}
+
+		result := formatPlaybookContext(api, record)
+
+		// Verify all components present (AC2, AC3)
+		assert.Contains(t, result, "**Playbook Context:**")
+		assert.Contains(t, result, "- Playbook: Deploy - Production Release v2.1.0")
+		assert.Contains(t, result, "- Channel: ~deploy-prod-v2-1-0")
+		api.AssertExpectations(t)
+	})
+
+	t.Run("truncates long playbook names", func(t *testing.T) {
+		api := &plugintest.API{}
+		api.On("GetChannel", "channel456").Return(&model.Channel{
+			Id:   "channel456",
+			Name: "test-channel",
+		}, nil)
+
+		longName := "This is a very long playbook name that exceeds the fifty character limit and needs truncation"
+		record := &approval.ApprovalRecord{
+			PlaybookRunID:     "run123",
+			PlaybookName:      longName,
+			PlaybookChannelID: "channel456",
+		}
+
+		result := formatPlaybookContext(api, record)
+
+		// Verify truncation (AC8)
+		assert.Contains(t, result, "**Playbook Context:**")
+		assert.NotContains(t, result, longName, "Should not contain full long name")
+		assert.Contains(t, result, "...", "Should end with ellipsis")
+
+		// Verify the playbook name part is truncated to ≤50 chars
+		// The format is "- Playbook: NAME\n", so find and extract the name
+		startMarker := "- Playbook: "
+		startIdx := strings.Index(result, startMarker)
+		assert.NotEqual(t, -1, startIdx, "Should contain playbook marker")
+
+		// Extract from marker to next newline
+		nameStart := startIdx + len(startMarker)
+		endIdx := strings.Index(result[nameStart:], "\n")
+		if endIdx != -1 {
+			playbookName := result[nameStart : nameStart+endIdx]
+			assert.LessOrEqual(t, len(playbookName), 50, "Truncated name should be ≤50 chars")
+		}
+	})
+
+	t.Run("handles exactly 50 character playbook name", func(t *testing.T) {
+		api := &plugintest.API{}
+		api.On("GetChannel", "channel456").Return(&model.Channel{
+			Id:   "channel456",
+			Name: "test-channel",
+		}, nil)
+
+		exactName := strings.Repeat("a", 50)
+		record := &approval.ApprovalRecord{
+			PlaybookRunID:     "run123",
+			PlaybookName:      exactName,
+			PlaybookChannelID: "channel456",
+		}
+
+		result := formatPlaybookContext(api, record)
+
+		// Should not be truncated at exactly 50 chars
+		assert.Contains(t, result, exactName)
+		assert.NotContains(t, result, "...")
+		api.AssertExpectations(t)
+	})
+
+	t.Run("returns empty string when no playbook run ID", func(t *testing.T) {
+		api := &plugintest.API{}
+		record := &approval.ApprovalRecord{
+			PlaybookRunID:     "",
+			PlaybookName:      "Some Playbook",
+			PlaybookChannelID: "channel456",
+		}
+
+		result := formatPlaybookContext(api, record)
+
+		// Should return empty string (AC4)
+		assert.Empty(t, result)
+	})
+
+	t.Run("returns empty string when no playbook name", func(t *testing.T) {
+		api := &plugintest.API{}
+		record := &approval.ApprovalRecord{
+			PlaybookRunID:     "run123",
+			PlaybookName:      "",
+			PlaybookChannelID: "channel456",
+		}
+
+		result := formatPlaybookContext(api, record)
+
+		// Should return empty string (AC4)
+		assert.Empty(t, result)
+	})
+
+	t.Run("formats channel link with channel name", func(t *testing.T) {
+		api := &plugintest.API{}
+		api.On("GetChannel", "channelid123").Return(&model.Channel{
+			Id:   "channelid123",
+			Name: "incident-47",
+		}, nil)
+
+		record := &approval.ApprovalRecord{
+			PlaybookRunID:     "run123",
+			PlaybookName:      "Test Playbook",
+			PlaybookChannelID: "channelid123",
+		}
+
+		result := formatPlaybookContext(api, record)
+
+		// Verify channel link format uses channel name, not ID (AC3)
+		assert.Contains(t, result, "~incident-47")
+		assert.NotContains(t, result, "channelid123")
+		api.AssertExpectations(t)
+	})
+
+	t.Run("falls back to channel ID when GetChannel fails", func(t *testing.T) {
+		api := &plugintest.API{}
+		api.On("GetChannel", "channel456").Return(nil, &model.AppError{Message: "not found"})
+		api.On("LogDebug", mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything).Maybe()
+
+		record := &approval.ApprovalRecord{
+			PlaybookRunID:     "run123",
+			PlaybookName:      "Test Playbook",
+			PlaybookChannelID: "channel456",
+		}
+
+		result := formatPlaybookContext(api, record)
+
+		// Should fallback to ID if channel lookup fails
+		assert.Contains(t, result, "~channel456")
+		api.AssertExpectations(t)
+	})
+
+	t.Run("truncates UTF-8 multibyte characters correctly", func(t *testing.T) {
+		api := &plugintest.API{}
+		api.On("GetChannel", "channel789").Return(&model.Channel{
+			Id:   "channel789",
+			Name: "deploy-prod",
+		}, nil)
+
+		// 51 runes total - emoji 🚀 takes 4 bytes but counts as 1 rune
+		// Should truncate to 47 runes + "..." = 50 character limit
+		longNameWithEmoji := "Deploy 🚀 Production Release v2.1.0 for Customer ABC"
+
+		record := &approval.ApprovalRecord{
+			PlaybookRunID:     "run789",
+			PlaybookName:      longNameWithEmoji,
+			PlaybookChannelID: "channel789",
+		}
+
+		result := formatPlaybookContext(api, record)
+
+		// Should truncate at 47 runes + "..." without corrupting UTF-8
+		assert.Contains(t, result, "Deploy 🚀 Production Release v2.1.0 for Customer...")
+		// Verify the emoji is intact (not corrupted)
+		assert.Contains(t, result, "🚀")
+		api.AssertExpectations(t)
+	})
+
+	t.Run("falls back to channel ID when channel name is empty", func(t *testing.T) {
+		api := &plugintest.API{}
+		api.On("GetChannel", "channel999").Return(&model.Channel{
+			Id:   "channel999",
+			Name: "", // Empty name
+		}, nil)
+		api.On("LogDebug", mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything).Maybe()
+
+		record := &approval.ApprovalRecord{
+			PlaybookRunID:     "run999",
+			PlaybookName:      "Test Playbook",
+			PlaybookChannelID: "channel999",
+		}
+
+		result := formatPlaybookContext(api, record)
+
+		// Should fallback to ID when channel name is empty
+		assert.Contains(t, result, "~channel999")
+		api.AssertExpectations(t)
+	})
+}
+
+// Story 8.4: Integration tests for SendApprovalRequestDM with playbook context
+func TestSendApprovalRequestDM_PlaybookContext(t *testing.T) {
+	t.Run("includes playbook context when present", func(t *testing.T) {
+		// Setup mock API
+		api := &plugintest.API{}
+		botUserID := "bot123"
+		approverID := "approver456"
+		dmChannelID := "dm789"
+
+		api.On("GetDirectChannel", botUserID, approverID).Return(&model.Channel{Id: dmChannelID}, nil)
+		api.On("GetChannel", "incident-channel-123").Return(&model.Channel{
+			Id:   "incident-channel-123",
+			Name: "incident-47-deploy",
+		}, nil)
+		api.On("CreatePost", mock.MatchedBy(func(post *model.Post) bool {
+			// Verify standard fields
+			if post.UserId != botUserID || post.ChannelId != dmChannelID {
+				return false
+			}
+
+			// Verify playbook context is included (AC1, AC5)
+			return strings.Contains(post.Message, "**Playbook Context:**") &&
+				strings.Contains(post.Message, "Incident #47") &&
+				strings.Contains(post.Message, "~incident-47-deploy") &&
+				strings.Contains(post.Message, "📋 **Approval Request**") &&
+				strings.Contains(post.Message, "A-TEST01")
+		})).Return(&model.Post{Id: "post_123"}, nil)
+
+		// Create test approval record with playbook context
+		record := &approval.ApprovalRecord{
+			ID:                   "record123",
+			Code:                 "A-TEST01",
+			ApproverID:           approverID,
+			RequesterUsername:    "alice",
+			RequesterDisplayName: "Alice Carter",
+			Description:          "Emergency DB access",
+			CreatedAt:            1704988800000,
+			PlaybookRunID:        "run456",
+			PlaybookName:         "Incident #47",
+			PlaybookChannelID:    "incident-channel-123",
+		}
+
+		// Execute
+		postID, err := SendApprovalRequestDM(api, botUserID, record)
+
+		// Assert
+		assert.NoError(t, err)
+		assert.Equal(t, "post_123", postID)
+		api.AssertExpectations(t)
+	})
+
+	t.Run("excludes playbook context when not present", func(t *testing.T) {
+		// Setup mock API
+		api := &plugintest.API{}
+		botUserID := "bot123"
+		approverID := "approver456"
+		dmChannelID := "dm789"
+
+		api.On("GetDirectChannel", botUserID, approverID).Return(&model.Channel{Id: dmChannelID}, nil)
+		api.On("CreatePost", mock.MatchedBy(func(post *model.Post) bool {
+			// Verify playbook context is NOT included (AC4)
+			return !strings.Contains(post.Message, "**Playbook Context:**") &&
+				strings.Contains(post.Message, "📋 **Approval Request**") &&
+				strings.Contains(post.Message, "A-TEST02")
+		})).Return(&model.Post{Id: "post_456"}, nil)
+
+		// Create test approval record WITHOUT playbook context
+		record := &approval.ApprovalRecord{
+			ID:                   "record456",
+			Code:                 "A-TEST02",
+			ApproverID:           approverID,
+			RequesterUsername:    "bob",
+			RequesterDisplayName: "Bob Smith",
+			Description:          "Regular approval request",
+			CreatedAt:            1704988800000,
+			// No playbook fields
+		}
+
+		// Execute
+		postID, err := SendApprovalRequestDM(api, botUserID, record)
+
+		// Assert
+		assert.NoError(t, err)
+		assert.Equal(t, "post_456", postID)
+		api.AssertExpectations(t)
+	})
+
+	t.Run("playbook context appears before buttons", func(t *testing.T) {
+		// Setup mock API
+		api := &plugintest.API{}
+		botUserID := "bot123"
+		approverID := "approver456"
+		dmChannelID := "dm789"
+
+		var capturedMessage string
+		api.On("GetDirectChannel", botUserID, approverID).Return(&model.Channel{Id: dmChannelID}, nil)
+		api.On("GetChannel", "deploy-channel").Return(&model.Channel{
+			Id:   "deploy-channel",
+			Name: "deploy-v3-0",
+		}, nil)
+		api.On("CreatePost", mock.MatchedBy(func(post *model.Post) bool {
+			capturedMessage = post.Message
+			return true
+		})).Return(&model.Post{Id: "post_789"}, nil)
+
+		// Create test approval record with playbook context
+		record := &approval.ApprovalRecord{
+			ID:                   "record789",
+			Code:                 "A-TEST03",
+			ApproverID:           approverID,
+			RequesterUsername:    "charlie",
+			RequesterDisplayName: "Charlie Davis",
+			Description:          "Test approval",
+			CreatedAt:            1704988800000,
+			PlaybookRunID:        "run789",
+			PlaybookName:         "Deploy v3.0",
+			PlaybookChannelID:    "deploy-channel",
+		}
+
+		// Execute
+		_, err := SendApprovalRequestDM(api, botUserID, record)
+		assert.NoError(t, err)
+
+		// Verify playbook context appears after Request ID (AC5)
+		requestIDIndex := strings.Index(capturedMessage, "**Request ID:**")
+		playbookContextIndex := strings.Index(capturedMessage, "**Playbook Context:**")
+
+		assert.NotEqual(t, -1, requestIDIndex, "Request ID should be present")
+		assert.NotEqual(t, -1, playbookContextIndex, "Playbook context should be present")
+		assert.Greater(t, playbookContextIndex, requestIDIndex, "Playbook context should appear after Request ID")
+
+		api.AssertExpectations(t)
+	})
+}
+
 // Helper function to verify the plugin.API interface is satisfied
 var _ plugin.API = (*plugintest.API)(nil)

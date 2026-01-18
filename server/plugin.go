@@ -63,18 +63,29 @@ func (p *Plugin) OnActivate() error {
 	// Initialize approval service
 	p.service = approval.NewService(p.store, p.API, botID)
 
-	// Initialize and start timeout checker (Story 6.1)
-	p.timeoutChecker = timeout.NewChecker(p.store, p.service, p.API, botID)
-	p.timeoutChecker.Start()
-
-	// Initialize Playbooks integration (Story 8.2: user-context authentication)
+	// Initialize Playbooks integration (Story 8.2: user-context authentication, Story 8.6: plugin detection)
+	// Must be initialized before timeout checker (Story 8.5)
+	// Story 8.6 AC1: Check if Playbooks plugin is active before enabling integration
 	siteURL := p.API.GetConfig().ServiceSettings.SiteURL
 	if siteURL != nil && *siteURL != "" {
-		p.playbooksClient = playbooks.NewClient(p.API, *siteURL)
-		p.API.LogInfo("Playbooks integration initialized with user-context authentication")
+		// Check if Playbooks plugin is active
+		if p.isPlaybooksPluginActive() {
+			p.playbooksClient = playbooks.NewClient(p.API, *siteURL)
+			p.API.LogInfo("Playbooks integration initialized",
+				"circuit_breaker_threshold", 5,
+				"circuit_breaker_timeout", "5m")
+		} else {
+			p.playbooksClient = nil
+			p.API.LogInfo("Playbooks plugin not active, integration disabled")
+		}
 	} else {
+		p.playbooksClient = nil
 		p.API.LogWarn("Site URL not configured, Playbooks integration disabled")
 	}
+
+	// Initialize and start timeout checker (Story 6.1, Story 8.5)
+	p.timeoutChecker = timeout.NewChecker(p.store, p.service, p.API, botID, p.playbooksClient)
+	p.timeoutChecker.Start()
 
 	// Register slash command
 	if err := p.registerCommand(); err != nil {
@@ -496,6 +507,25 @@ func (p *Plugin) formatVerifyError(err error, code string) string {
 	default:
 		return "❌ Failed to verify approval request. Please try again."
 	}
+}
+
+// isPlaybooksPluginActive checks if the Playbooks plugin is installed and active
+// Story 8.6 AC1: Approvals work as v1.0 when Playbooks is disabled
+// GetPlugins() returns only active plugins, so presence in list means active
+func (p *Plugin) isPlaybooksPluginActive() bool {
+	plugins, appErr := p.API.GetPlugins()
+	if appErr != nil {
+		p.API.LogWarn("Could not check for Playbooks plugin", "error", appErr.Error())
+		return false
+	}
+
+	for _, manifest := range plugins {
+		if manifest.Id == "playbooks" {
+			return true
+		}
+	}
+
+	return false
 }
 
 // See https://developers.mattermost.com/extend/plugins/server/reference/

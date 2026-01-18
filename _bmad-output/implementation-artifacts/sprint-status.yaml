@@ -106,8 +106,8 @@ development_status:
   epic-8: in-progress
   8-1-playbook-context-detection: review
   8-2-data-model-extension-playbook-metadata: done
-  8-3-post-status-messages-playbook-channel: ready-for-dev
-  8-4-add-playbook-context-approver-dms: ready-for-dev
-  8-5-update-playbook-channel-status-changes: ready-for-dev
-  8-6-error-handling-graceful-fallback: ready-for-dev
+  8-3-post-status-messages-playbook-channel: done
+  8-4-add-playbook-context-approver-dms: done
+  8-5-update-playbook-channel-status-changes: done
+  8-6-error-handling-graceful-fallback: done
   epic-8-retrospective: optional

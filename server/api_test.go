@@ -2,6 +2,7 @@ package main
 
 import (
 	"encoding/json"
+	"fmt"
 	"strings"
 	"testing"
 	"time"
@@ -13,6 +14,7 @@ import (
 	"github.com/mattermost/mattermost/server/public/plugin/plugintest"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
+	"github.com/stretchr/testify/require"
 )
 
 // MockPlaybooksClient is a mock implementation of playbooks.ClientInterface for testing
@@ -26,6 +28,16 @@ func (m *MockPlaybooksClient) GetPlaybookRunByChannel(channelID string, requeste
 		return run.(*playbooks.PlaybookRun), args.Error(1)
 	}
 	return nil, args.Error(1)
+}
+
+func (m *MockPlaybooksClient) PostPlaybookStatus(runID string, message string, requesterUserID string) (string, error) {
+	args := m.Called(runID, message, requesterUserID)
+	return args.String(0), args.Error(1)
+}
+
+func (m *MockPlaybooksClient) GetMetrics() playbooks.Metrics {
+	args := m.Called()
+	return args.Get(0).(playbooks.Metrics)
 }
 
 // PlaybookRun type alias for test convenience
@@ -713,6 +725,9 @@ func TestHandleCancelCommand_Integration(t *testing.T) {
 			},
 		})
 
+		// Story 8.6: Mock GetPlugins for Playbooks plugin detection
+		api.On("GetPlugins").Return([]*model.Manifest{}, nil)
+
 		api.On("LogInfo", mock.Anything, mock.Anything, mock.Anything).Maybe()
 		api.On("LogDebug", mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything).Maybe()
 		api.On("LogWarn", mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything).Maybe()
@@ -802,6 +817,9 @@ func TestHandleCancelCommand_Integration(t *testing.T) {
 			},
 		})
 
+		// Story 8.6: Mock GetPlugins for Playbooks plugin detection
+		api.On("GetPlugins").Return([]*model.Manifest{}, nil)
+
 		// Mock bot token creation (Story 8.2)
 		api.On("LogInfo", mock.Anything, mock.Anything, mock.Anything).Maybe()
 		api.On("LogDebug", mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything).Maybe()
@@ -866,6 +884,9 @@ func TestHandleCancelCommand_Integration(t *testing.T) {
 				SiteURL: &siteURL,
 			},
 		})
+
+		// Story 8.6: Mock GetPlugins for Playbooks plugin detection
+		api.On("GetPlugins").Return([]*model.Manifest{}, nil)
 
 		// Mock bot token creation (Story 8.2)
 		api.On("LogInfo", mock.Anything, mock.Anything, mock.Anything).Maybe()
@@ -934,6 +955,9 @@ func TestHandleCancelCommand_Performance(t *testing.T) {
 				SiteURL: &siteURL,
 			},
 		})
+
+		// Story 8.6: Mock GetPlugins for Playbooks plugin detection
+		api.On("GetPlugins").Return([]*model.Manifest{}, nil)
 
 		// Mock bot token creation (Story 8.2)
 		api.On("LogInfo", mock.Anything, mock.Anything, mock.Anything).Maybe()
@@ -1689,6 +1713,8 @@ func TestHandleApproveNew_PlaybookContext(t *testing.T) {
 			Name:      "Incident #47",
 			ChannelID: "channel123",
 		}, nil)
+		// Story 8.3: Mock playbook status posting
+		mockPlaybooksClient.On("PostPlaybookStatus", "playbook_run_456", mock.Anything, "req123").Return("post123", nil)
 		plugin.playbooksClient = mockPlaybooksClient
 
 		// Mock users
@@ -1711,10 +1737,15 @@ func TestHandleApproveNew_PlaybookContext(t *testing.T) {
 
 		// Mock notifications
 		api.On("GetDirectChannel", "bot123", "app456").Return(&model.Channel{Id: "dm_channel"}, nil)
+		// Story 8.4: Mock GetChannel for playbook context in DM
+		api.On("GetChannel", "channel123").Return(&model.Channel{
+			Id:   "channel123",
+			Name: "incident-47",
+		}, nil)
 		api.On("CreatePost", mock.Anything).Return(&model.Post{}, nil)
 		api.On("SendEphemeralPost", "req123", mock.Anything).Return(&model.Post{})
 		api.On("LogInfo", mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything).Maybe()
-		api.On("LogDebug", mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything).Maybe()
+		api.On("LogDebug", mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything).Maybe()
 		api.On("LogWarn", mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything).Maybe()
 
 		payload := &model.SubmitDialogRequest{
@@ -1737,7 +1768,7 @@ func TestHandleApproveNew_PlaybookContext(t *testing.T) {
 		assert.Equal(t, "playbook_run_456", savedRecord.PlaybookRunID)
 		assert.Equal(t, "Incident #47", savedRecord.PlaybookName)
 		assert.Equal(t, "channel123", savedRecord.PlaybookChannelID)
-		assert.Empty(t, savedRecord.PlaybookPostID) // Will be set in Story 8.3
+		assert.Equal(t, "post123", savedRecord.PlaybookPostID) // Story 8.3: Post ID now set
 		mockPlaybooksClient.AssertExpectations(t)
 		api.AssertExpectations(t)
 	})
@@ -1839,6 +1870,7 @@ func TestHandleApproveNew_PlaybookContext(t *testing.T) {
 		api.On("CreatePost", mock.Anything).Return(&model.Post{}, nil)
 		api.On("SendEphemeralPost", "req123", mock.Anything).Return(&model.Post{})
 		api.On("LogInfo", mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything).Maybe()
+		api.On("LogDebug", mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything).Maybe()
 		api.On("LogWarn", mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything).Maybe()
 
 		payload := &model.SubmitDialogRequest{
@@ -1859,6 +1891,344 @@ func TestHandleApproveNew_PlaybookContext(t *testing.T) {
 		assert.Empty(t, response.Error)
 		assert.NotNil(t, savedRecord)
 		assert.Empty(t, savedRecord.PlaybookRunID) // Empty due to error
+		mockPlaybooksClient.AssertExpectations(t)
+		api.AssertExpectations(t)
+	})
+}
+
+// Story 8.3: Tests for formatPendingPlaybookStatusMessage
+func TestFormatPendingPlaybookStatusMessage(t *testing.T) {
+	t.Run("formats message with all components", func(t *testing.T) {
+		record := &approval.ApprovalRecord{
+			Code:        "A-X7K9Q2",
+			Description: "Deploy v2.1.0 to production",
+		}
+
+		message := formatPendingPlaybookStatusMessage(record, "jane.doe")
+
+		// Verify message contains all required components (AC2, AC4, AC5)
+		assert.Contains(t, message, "⏳", "Should contain emoji indicator")
+		assert.Contains(t, message, "**Approval Pending:**", "Should contain bold status")
+		assert.Contains(t, message, "A-X7K9Q2", "Should contain reference code")
+		assert.Contains(t, message, "Deploy v2.1.0 to production", "Should contain description")
+		assert.Contains(t, message, "@jane.doe", "Should contain approver mention")
+
+		// Verify exact format
+		expected := "⏳ **Approval Pending:** A-X7K9Q2 | Deploy v2.1.0 to production | Waiting for @jane.doe"
+		assert.Equal(t, expected, message)
+	})
+
+	t.Run("truncates long descriptions", func(t *testing.T) {
+		longDescription := "This is a very long description that definitely exceeds one hundred characters and needs to be truncated appropriately"
+		record := &approval.ApprovalRecord{
+			Code:        "A-TEST01",
+			Description: longDescription,
+		}
+
+		message := formatPendingPlaybookStatusMessage(record, "approver")
+
+		// Verify description is truncated to 100 chars (AC2)
+		assert.Contains(t, message, "...", "Truncated message should end with ellipsis")
+
+		// Extract the details portion
+		// Format: "⏳ **Approval Pending:** CODE | DETAILS | Waiting for @user"
+		parts := strings.Split(message, " | ")
+		require.Len(t, parts, 3, "Message should have 3 parts")
+
+		detailsPart := parts[1]
+		assert.LessOrEqual(t, len(detailsPart), 100, "Details should be truncated to <=100 chars")
+		assert.True(t, strings.HasSuffix(detailsPart, "..."), "Details should end with ellipsis")
+	})
+
+	t.Run("handles exactly 100 character descriptions", func(t *testing.T) {
+		// Create description of exactly 100 characters
+		description := strings.Repeat("a", 100)
+		record := &approval.ApprovalRecord{
+			Code:        "A-TEST02",
+			Description: description,
+		}
+
+		message := formatPendingPlaybookStatusMessage(record, "user")
+
+		// Should not be truncated
+		assert.Contains(t, message, description)
+		assert.NotContains(t, message, "...", "Should not truncate at exactly 100 chars")
+	})
+
+	t.Run("handles short descriptions", func(t *testing.T) {
+		record := &approval.ApprovalRecord{
+			Code:        "A-TEST03",
+			Description: "Short",
+		}
+
+		message := formatPendingPlaybookStatusMessage(record, "user")
+
+		// Should not be truncated
+		assert.Contains(t, message, "Short")
+		assert.NotContains(t, message, "...", "Should not truncate short descriptions")
+	})
+
+	t.Run("handles special characters in username", func(t *testing.T) {
+		record := &approval.ApprovalRecord{
+			Code:        "A-TEST04",
+			Description: "Test approval",
+		}
+
+		message := formatPendingPlaybookStatusMessage(record, "user.name-123")
+
+		assert.Contains(t, message, "@user.name-123", "Should handle special chars in username")
+	})
+
+	t.Run("handles unicode and emoji in description", func(t *testing.T) {
+		record := &approval.ApprovalRecord{
+			Code:        "A-TEST05",
+			Description: "部署到生产环境 🚀 déploiement en production",
+		}
+
+		message := formatPendingPlaybookStatusMessage(record, "user")
+
+		// Should contain unicode and emoji without corruption
+		assert.Contains(t, message, "部署到生产环境 🚀 déploiement en production")
+		assert.Contains(t, message, "A-TEST05")
+	})
+
+	t.Run("handles empty code gracefully", func(t *testing.T) {
+		record := &approval.ApprovalRecord{
+			Code:        "",
+			Description: "Test approval",
+		}
+
+		message := formatPendingPlaybookStatusMessage(record, "user")
+
+		// Should use fallback code
+		assert.Contains(t, message, "UNKNOWN")
+		assert.Contains(t, message, "Test approval")
+		assert.Contains(t, message, "@user")
+	})
+
+	t.Run("handles empty username gracefully", func(t *testing.T) {
+		record := &approval.ApprovalRecord{
+			Code:        "A-TEST06",
+			Description: "Test approval",
+		}
+
+		message := formatPendingPlaybookStatusMessage(record, "")
+
+		// Should use fallback username
+		assert.Contains(t, message, "@approver")
+		assert.Contains(t, message, "A-TEST06")
+		assert.Contains(t, message, "Test approval")
+	})
+}
+
+// Story 8.3: Integration tests for playbook status posting
+func TestHandleApproveNew_PlaybookStatusPosting(t *testing.T) {
+	t.Run("posts status to playbook channel and stores post ID", func(t *testing.T) {
+		// Setup
+		api := &plugintest.API{}
+		plugin := &Plugin{}
+		plugin.SetAPI(api)
+		plugin.botUserID = "bot123"
+
+		// Mock playbooks client
+		mockPlaybooksClient := &MockPlaybooksClient{}
+		mockPlaybooksClient.On("GetPlaybookRunByChannel", "channel123", "req123").Return(&PlaybookRun{
+			ID:        "playbook_run_456",
+			Name:      "Incident #47",
+			ChannelID: "channel123",
+		}, nil)
+		mockPlaybooksClient.On("PostPlaybookStatus", "playbook_run_456", mock.MatchedBy(func(msg string) bool {
+			// Verify message format (AC2)
+			return strings.Contains(msg, "⏳") &&
+				strings.Contains(msg, "**Approval Pending:**") &&
+				strings.Contains(msg, "@bob")
+		}), "req123").Return("post789", nil)
+		plugin.playbooksClient = mockPlaybooksClient
+
+		// Mock users
+		requester := &model.User{Id: "req123", Username: "alice", FirstName: "Alice", LastName: "Smith"}
+		approver := &model.User{Id: "app456", Username: "bob", FirstName: "Bob", LastName: "Jones"}
+		api.On("GetUser", "req123").Return(requester, nil)
+		api.On("GetUser", "app456").Return(approver, nil)
+
+		// Mock KV store
+		var savedRecord *approval.ApprovalRecord
+		api.On("KVGet", mock.Anything).Return(nil, nil)
+		api.On("KVSet", mock.Anything, mock.Anything).Run(func(args mock.Arguments) {
+			if key, ok := args.Get(0).(string); ok && strings.HasPrefix(key, "approval:record:") {
+				data := args.Get(1).([]byte)
+				var record approval.ApprovalRecord
+				_ = json.Unmarshal(data, &record)
+				savedRecord = &record
+			}
+		}).Return(nil)
+
+		// Mock notifications
+		api.On("GetDirectChannel", "bot123", "app456").Return(&model.Channel{Id: "dm_channel"}, nil)
+		// Story 8.4: Mock GetChannel for playbook context in DM
+		api.On("GetChannel", "channel123").Return(&model.Channel{
+			Id:   "channel123",
+			Name: "incident-47",
+		}, nil)
+		api.On("CreatePost", mock.Anything).Return(&model.Post{}, nil)
+		api.On("SendEphemeralPost", "req123", mock.Anything).Return(&model.Post{})
+		api.On("LogInfo", mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything).Maybe()
+		api.On("LogDebug", mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything).Maybe()
+
+		payload := &model.SubmitDialogRequest{
+			UserId:    "req123",
+			ChannelId: "channel123",
+			TeamId:    "team789",
+			Submission: map[string]any{
+				"approver":    "app456",
+				"description": "Test approval",
+			},
+		}
+
+		// Execute
+		response := plugin.handleApproveNew(payload)
+
+		// Verify
+		assert.NotNil(t, response)
+		assert.Empty(t, response.Error)
+		assert.NotNil(t, savedRecord)
+
+		// Verify playbook post ID was stored (AC6)
+		assert.Equal(t, "post789", savedRecord.PlaybookPostID)
+		mockPlaybooksClient.AssertExpectations(t)
+		api.AssertExpectations(t)
+	})
+
+	t.Run("gracefully handles posting error without failing approval", func(t *testing.T) {
+		// Setup
+		api := &plugintest.API{}
+		plugin := &Plugin{}
+		plugin.SetAPI(api)
+		plugin.botUserID = "bot123"
+
+		// Mock playbooks client - posting fails
+		mockPlaybooksClient := &MockPlaybooksClient{}
+		mockPlaybooksClient.On("GetPlaybookRunByChannel", "channel123", "req123").Return(&PlaybookRun{
+			ID:        "playbook_run_456",
+			Name:      "Incident #47",
+			ChannelID: "channel123",
+		}, nil)
+		mockPlaybooksClient.On("PostPlaybookStatus", "playbook_run_456", mock.Anything, "req123").Return("", fmt.Errorf("API error"))
+		plugin.playbooksClient = mockPlaybooksClient
+
+		// Mock users
+		requester := &model.User{Id: "req123", Username: "alice", FirstName: "Alice", LastName: "Smith"}
+		approver := &model.User{Id: "app456", Username: "bob", FirstName: "Bob", LastName: "Jones"}
+		api.On("GetUser", "req123").Return(requester, nil)
+		api.On("GetUser", "app456").Return(approver, nil)
+
+		// Mock KV store
+		var savedRecord *approval.ApprovalRecord
+		api.On("KVGet", mock.Anything).Return(nil, nil)
+		api.On("KVSet", mock.Anything, mock.Anything).Run(func(args mock.Arguments) {
+			if key, ok := args.Get(0).(string); ok && strings.HasPrefix(key, "approval:record:") {
+				data := args.Get(1).([]byte)
+				var record approval.ApprovalRecord
+				_ = json.Unmarshal(data, &record)
+				savedRecord = &record
+			}
+		}).Return(nil)
+
+		// Mock notifications
+		api.On("GetDirectChannel", "bot123", "app456").Return(&model.Channel{Id: "dm_channel"}, nil)
+		// Story 8.4: Mock GetChannel for playbook context in DM
+		api.On("GetChannel", "channel123").Return(&model.Channel{
+			Id:   "channel123",
+			Name: "incident-47",
+		}, nil)
+		api.On("CreatePost", mock.Anything).Return(&model.Post{}, nil)
+		api.On("SendEphemeralPost", "req123", mock.Anything).Return(&model.Post{})
+		api.On("LogInfo", mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything).Maybe()
+		api.On("LogDebug", mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything).Maybe()
+		api.On("LogWarn", mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything).Maybe()
+
+		payload := &model.SubmitDialogRequest{
+			UserId:    "req123",
+			ChannelId: "channel123",
+			TeamId:    "team789",
+			Submission: map[string]any{
+				"approver":    "app456",
+				"description": "Test approval",
+			},
+		}
+
+		// Execute
+		response := plugin.handleApproveNew(payload)
+
+		// Verify - approval should succeed despite posting error (AC7)
+		assert.NotNil(t, response)
+		assert.Empty(t, response.Error)
+		assert.NotNil(t, savedRecord)
+
+		// PlaybookPostID should be empty since posting failed
+		assert.Empty(t, savedRecord.PlaybookPostID)
+		mockPlaybooksClient.AssertExpectations(t)
+		api.AssertExpectations(t)
+	})
+
+	t.Run("skips posting for non-playbook approvals", func(t *testing.T) {
+		// Setup
+		api := &plugintest.API{}
+		plugin := &Plugin{}
+		plugin.SetAPI(api)
+		plugin.botUserID = "bot123"
+
+		// Mock playbooks client - returns nil (no playbook)
+		mockPlaybooksClient := &MockPlaybooksClient{}
+		mockPlaybooksClient.On("GetPlaybookRunByChannel", "regular-channel", "req123").Return(nil, nil)
+		// PostPlaybookStatus should NOT be called
+		plugin.playbooksClient = mockPlaybooksClient
+
+		// Mock users
+		requester := &model.User{Id: "req123", Username: "alice", FirstName: "Alice", LastName: "Smith"}
+		approver := &model.User{Id: "app456", Username: "bob", FirstName: "Bob", LastName: "Jones"}
+		api.On("GetUser", "req123").Return(requester, nil)
+		api.On("GetUser", "app456").Return(approver, nil)
+
+		// Mock KV store
+		var savedRecord *approval.ApprovalRecord
+		api.On("KVGet", mock.Anything).Return(nil, nil)
+		api.On("KVSet", mock.Anything, mock.Anything).Run(func(args mock.Arguments) {
+			if key, ok := args.Get(0).(string); ok && strings.HasPrefix(key, "approval:record:") {
+				data := args.Get(1).([]byte)
+				var record approval.ApprovalRecord
+				_ = json.Unmarshal(data, &record)
+				savedRecord = &record
+			}
+		}).Return(nil)
+
+		// Mock notifications
+		api.On("GetDirectChannel", "bot123", "app456").Return(&model.Channel{Id: "dm_channel"}, nil)
+		api.On("CreatePost", mock.Anything).Return(&model.Post{}, nil)
+		api.On("SendEphemeralPost", "req123", mock.Anything).Return(&model.Post{})
+		api.On("LogInfo", mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything).Maybe()
+
+		payload := &model.SubmitDialogRequest{
+			UserId:    "req123",
+			ChannelId: "regular-channel",
+			TeamId:    "team789",
+			Submission: map[string]any{
+				"approver":    "app456",
+				"description": "Test approval",
+			},
+		}
+
+		// Execute
+		response := plugin.handleApproveNew(payload)
+
+		// Verify
+		assert.NotNil(t, response)
+		assert.Empty(t, response.Error)
+		assert.NotNil(t, savedRecord)
+
+		// No playbook fields should be set (AC8)
+		assert.Empty(t, savedRecord.PlaybookRunID)
+		assert.Empty(t, savedRecord.PlaybookPostID)
 		mockPlaybooksClient.AssertExpectations(t)
 		api.AssertExpectations(t)
 	})

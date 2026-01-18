@@ -3,6 +3,7 @@ package notifications
 import (
 	"fmt"
 	"time"
+	"unicode/utf8"
 
 	"github.com/mattermost/mattermost-plugin-approver2/server/approval"
 	"github.com/mattermost/mattermost/server/public/model"
@@ -45,6 +46,12 @@ func SendApprovalRequestDM(api plugin.API, botUserID string, record *approval.Ap
 		timestampStr,
 		record.Description,
 		record.Code)
+
+	// Story 8.4: Add playbook context if this is a playbook-linked approval (AC1, AC5)
+	playbookContext := formatPlaybookContext(api, record)
+	if playbookContext != "" {
+		message += playbookContext
+	}
 
 	// Create post with interactive action buttons
 	post := &model.Post{
@@ -504,6 +511,48 @@ func SendVerificationNotificationDM(api plugin.API, botUserID string, record *ap
 	}
 
 	return createdPost.Id, nil
+}
+
+// formatPlaybookContext formats the playbook context section for DM notifications
+// Returns formatted string with playbook name and channel link (Story 8.4: AC2, AC3, AC8)
+// Returns empty string if no playbook context is available
+func formatPlaybookContext(api plugin.API, record *approval.ApprovalRecord) string {
+	// Only format if this is a playbook-linked approval
+	if record.PlaybookRunID == "" || record.PlaybookName == "" {
+		return ""
+	}
+
+	// Truncate playbook name if > 50 characters (AC8)
+	// Use rune count for proper UTF-8 handling (emojis, CJK characters, etc.)
+	playbookName := record.PlaybookName
+	if utf8.RuneCountInString(playbookName) > 50 {
+		runes := []rune(playbookName)
+		playbookName = string(runes[:47]) + "..."
+	}
+
+	// Get channel name for clickable link (requires channel name, not ID)
+	var channelLink string
+	if record.PlaybookChannelID != "" {
+		channel, err := api.GetChannel(record.PlaybookChannelID)
+		if err != nil || channel == nil || channel.Name == "" {
+			// Fallback to ID if we can't fetch channel name or name is empty
+			api.LogDebug("Failed to get playbook channel for link",
+				"channel_id", record.PlaybookChannelID,
+				"error", err)
+			channelLink = fmt.Sprintf("~%s", record.PlaybookChannelID)
+		} else {
+			// Use channel name for proper clickable link
+			channelLink = fmt.Sprintf("~%s", channel.Name)
+		}
+	} else {
+		channelLink = "~unknown"
+	}
+
+	return fmt.Sprintf("\n**Playbook Context:**\n"+
+		"- Playbook: %s\n"+
+		"- Channel: %s\n",
+		playbookName,
+		channelLink)
 }
 
 // GetDMChannelID gets or creates a DM channel between the bot and the target user.

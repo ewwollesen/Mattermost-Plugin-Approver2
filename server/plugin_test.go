@@ -29,6 +29,9 @@ func TestOnActivate(t *testing.T) {
 			},
 		})
 
+		// Story 8.6: Mock GetPlugins for Playbooks plugin detection
+		api.On("GetPlugins").Return([]*model.Manifest{}, nil)
+
 		api.On("LogInfo", mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return()
 
 		p := &Plugin{}
@@ -55,6 +58,9 @@ func TestOnActivate(t *testing.T) {
 			},
 		})
 
+		// Story 8.6: Mock GetPlugins for Playbooks plugin detection
+		api.On("GetPlugins").Return([]*model.Manifest{}, nil)
+
 		p := &Plugin{}
 		p.SetAPI(api)
 
@@ -74,6 +80,76 @@ func TestOnActivate(t *testing.T) {
 		err := p.OnActivate()
 		assert.Error(t, err)
 		assert.Contains(t, err.Error(), "failed to ensure bot user")
+	})
+
+	// Story 8.6 AC1: Test that plugin works when Playbooks is disabled
+	t.Run("playbooks integration disabled when plugin not active", func(t *testing.T) {
+		api := &plugintest.API{}
+		api.On("EnsureBotUser", mock.AnythingOfType("*model.Bot")).Return("bot123", nil)
+		api.On("RegisterCommand", mock.AnythingOfType("*model.Command")).Return(nil)
+
+		// Mock GetConfig with valid site URL
+		siteURL := "http://localhost:8065"
+		api.On("GetConfig").Return(&model.Config{
+			ServiceSettings: model.ServiceSettings{
+				SiteURL: &siteURL,
+			},
+		})
+
+		// Mock GetPlugins returning empty list (Playbooks not active)
+		api.On("GetPlugins").Return([]*model.Manifest{}, nil)
+
+		// Expect log messages (timeout checker, playbooks disabled, etc.)
+		api.On("LogInfo", mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything).Maybe().Return()
+		api.On("LogInfo", mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything).Maybe().Return()
+		api.On("LogInfo", mock.Anything, mock.Anything, mock.Anything, mock.Anything).Maybe().Return()
+		api.On("LogInfo", mock.Anything).Maybe().Return()
+
+		p := &Plugin{}
+		p.SetAPI(api)
+
+		err := p.OnActivate()
+		assert.NoError(t, err)
+		assert.NotNil(t, p.store, "store should be initialized")
+		assert.Equal(t, "bot123", p.botUserID, "bot user ID should be initialized")
+		assert.Nil(t, p.playbooksClient, "playbooksClient should be nil when Playbooks is not active")
+		api.AssertExpectations(t)
+	})
+
+	// Story 8.6 AC1: Test that Playbooks integration is enabled when plugin is active
+	t.Run("playbooks integration enabled when plugin is active", func(t *testing.T) {
+		api := &plugintest.API{}
+		api.On("EnsureBotUser", mock.AnythingOfType("*model.Bot")).Return("bot123", nil)
+		api.On("RegisterCommand", mock.AnythingOfType("*model.Command")).Return(nil)
+
+		// Mock GetConfig with valid site URL
+		siteURL := "http://localhost:8065"
+		api.On("GetConfig").Return(&model.Config{
+			ServiceSettings: model.ServiceSettings{
+				SiteURL: &siteURL,
+			},
+		})
+
+		// Mock GetPlugins returning Playbooks manifest (Playbooks is active)
+		api.On("GetPlugins").Return([]*model.Manifest{
+			{Id: "playbooks"},
+		}, nil)
+
+		// Expect log messages (timeout checker, playbooks initialized, etc.)
+		api.On("LogInfo", mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything).Maybe().Return()
+		api.On("LogInfo", mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything).Maybe().Return()
+		api.On("LogInfo", mock.Anything, mock.Anything, mock.Anything, mock.Anything).Maybe().Return()
+		api.On("LogInfo", mock.Anything).Maybe().Return()
+
+		p := &Plugin{}
+		p.SetAPI(api)
+
+		err := p.OnActivate()
+		assert.NoError(t, err)
+		assert.NotNil(t, p.store, "store should be initialized")
+		assert.Equal(t, "bot123", p.botUserID, "bot user ID should be initialized")
+		assert.NotNil(t, p.playbooksClient, "playbooksClient should be initialized when Playbooks is active")
+		api.AssertExpectations(t)
 	})
 }
 
@@ -164,6 +240,9 @@ func TestHandleCancelCommand(t *testing.T) {
 			},
 		})
 
+		// Story 8.6: Mock GetPlugins for Playbooks plugin detection
+		api.On("GetPlugins").Return([]*model.Manifest{}, nil)
+
 		// Mock KV store operations for GetByCode
 		api.On("KVGet", "approval:code:A-X7K9Q2").Return([]byte(`"record123"`), nil)
 
@@ -224,6 +303,9 @@ func TestHandleCancelCommand(t *testing.T) {
 			},
 		})
 
+		// Story 8.6: Mock GetPlugins for Playbooks plugin detection
+		api.On("GetPlugins").Return([]*model.Manifest{}, nil)
+
 		// Mock KV store operations
 		api.On("KVGet", "approval:code:A-X7K9Q2").Return([]byte(`"record123"`), nil)
 
@@ -280,6 +362,9 @@ func TestHandleCancelCommand(t *testing.T) {
 			},
 		})
 
+		// Story 8.6: Mock GetPlugins for Playbooks plugin detection
+		api.On("GetPlugins").Return([]*model.Manifest{}, nil)
+
 		// Mock KV store operations
 		api.On("KVGet", "approval:code:A-X7K9Q2").Return([]byte(`"record123"`), nil)
 
@@ -335,6 +420,9 @@ func TestHandleCancelCommand(t *testing.T) {
 				SiteURL: &siteURL,
 			},
 		})
+
+		// Story 8.6: Mock GetPlugins for Playbooks plugin detection
+		api.On("GetPlugins").Return([]*model.Manifest{}, nil)
 
 		// Mock KV store operations - code not found
 		api.On("KVGet", "approval:code:Z-NOTFND").Return(nil, nil)
@@ -403,6 +491,9 @@ func TestHandleCancelCommand(t *testing.T) {
 				SiteURL: &siteURL,
 			},
 		})
+
+		// Story 8.6: Mock GetPlugins for Playbooks plugin detection
+		api.On("GetPlugins").Return([]*model.Manifest{}, nil)
 
 		// Mock KV lookup for non-existent code (returns nil = not found)
 		api.On("KVGet", "approval:code:A-NOTFND").Return(nil, nil)
@@ -489,6 +580,9 @@ func TestHandleVerifyCommand(t *testing.T) {
 			},
 		})
 
+		// Story 8.6: Mock GetPlugins for Playbooks plugin detection
+		api.On("GetPlugins").Return([]*model.Manifest{}, nil)
+
 		// Mock KV store operations
 		api.On("KVGet", "approval:code:A-X7K9Q2").Return([]byte(`"record123"`), nil)
 
@@ -545,6 +639,9 @@ func TestHandleVerifyCommand(t *testing.T) {
 			},
 		})
 
+		// Story 8.6: Mock GetPlugins for Playbooks plugin detection
+		api.On("GetPlugins").Return([]*model.Manifest{}, nil)
+
 		// Mock KV store operations
 		api.On("KVGet", "approval:code:A-X7K9Q2").Return([]byte(`"record123"`), nil)
 
@@ -600,6 +697,9 @@ func TestHandleVerifyCommand(t *testing.T) {
 			},
 		})
 
+		// Story 8.6: Mock GetPlugins for Playbooks plugin detection
+		api.On("GetPlugins").Return([]*model.Manifest{}, nil)
+
 		// Mock KV store operations
 		api.On("KVGet", "approval:code:A-X7K9Q2").Return([]byte(`"record123"`), nil)
 
@@ -653,6 +753,9 @@ func TestHandleVerifyCommand(t *testing.T) {
 				SiteURL: &siteURL,
 			},
 		})
+
+		// Story 8.6: Mock GetPlugins for Playbooks plugin detection
+		api.On("GetPlugins").Return([]*model.Manifest{}, nil)
 
 		// Mock KV store operations - code not found
 		api.On("KVGet", "approval:code:A-NOTFND").Return(nil, nil)
@@ -863,6 +966,9 @@ func TestHandleAction(t *testing.T) {
 					SiteURL: &siteURL,
 				},
 			})
+
+			// Story 8.6: Mock GetPlugins for Playbooks plugin detection
+			api.On("GetPlugins").Return([]*model.Manifest{}, nil)
 
 			api.On("LogInfo", mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything).Maybe().Return()
 			api.On("LogError", mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything).Maybe().Return()

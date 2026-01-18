@@ -11,6 +11,7 @@ import (
 	"github.com/mattermost/mattermost-plugin-approver2/server/approval"
 	"github.com/mattermost/mattermost-plugin-approver2/server/command"
 	"github.com/mattermost/mattermost-plugin-approver2/server/notifications"
+	"github.com/mattermost/mattermost-plugin-approver2/server/playbooks"
 	"github.com/mattermost/mattermost-plugin-approver2/server/store"
 	"github.com/mattermost/mattermost/server/public/model"
 	"github.com/mattermost/mattermost/server/public/plugin"
@@ -31,6 +32,8 @@ func (p *Plugin) ServeHTTP(c *plugin.Context, w http.ResponseWriter, r *http.Req
 	apiRouter := router.PathPrefix("/api/v1").Subrouter()
 	apiRouter.Use(p.MattermostAuthorizationRequired)
 	apiRouter.HandleFunc("/hello", p.HelloWorld).Methods(http.MethodGet)
+	// Story 8.6 AC8: Health check endpoint for playbook integration status
+	apiRouter.HandleFunc("/health/playbooks", p.handlePlaybooksHealth).Methods(http.MethodGet)
 
 	router.ServeHTTP(w, r)
 }
@@ -50,6 +53,48 @@ func (p *Plugin) MattermostAuthorizationRequired(next http.Handler) http.Handler
 func (p *Plugin) HelloWorld(w http.ResponseWriter, r *http.Request) {
 	if _, err := w.Write([]byte("Hello, world!")); err != nil {
 		p.API.LogError("Failed to write response", "error", err)
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+	}
+}
+
+// handlePlaybooksHealth returns health status and metrics for Playbooks integration
+// Story 8.6 AC8: Health check endpoint reports playbook integration status
+// GET /plugins/com.mattermost.plugin-approver/api/v1/health/playbooks
+func (p *Plugin) handlePlaybooksHealth(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "application/json")
+
+	response := map[string]interface{}{
+		"enabled": p.playbooksClient != nil,
+	}
+
+	if p.playbooksClient != nil {
+		// Get metrics snapshot
+		metrics := p.playbooksClient.GetMetrics()
+
+		response["metrics"] = map[string]interface{}{
+			"detection": map[string]interface{}{
+				"calls":        metrics.DetectionCalls,
+				"success":      metrics.DetectionSuccess,
+				"failed":       metrics.DetectionFailed,
+				"success_rate": metrics.GetDetectionSuccessRate(),
+				"avg_latency_ms": metrics.DetectionLatency.Milliseconds(),
+			},
+			"status_post": map[string]interface{}{
+				"calls":        metrics.StatusPostCalls,
+				"success":      metrics.StatusPostSuccess,
+				"failed":       metrics.StatusPostFailed,
+				"success_rate": metrics.GetStatusPostSuccessRate(),
+				"avg_latency_ms": metrics.StatusPostLatency.Milliseconds(),
+			},
+			"circuit_breaker": map[string]interface{}{
+				"state":       metrics.CircuitBreakerState.String(),
+				"opens_count": metrics.CircuitBreakerOpens,
+			},
+		}
+	}
+
+	if err := json.NewEncoder(w).Encode(response); err != nil {
+		p.API.LogError("Failed to encode playbooks health response", "error", err)
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 	}
 }
@@ -263,6 +308,38 @@ func (p *Plugin) handleApproveNew(payload *model.SubmitDialogRequest) *model.Sub
 				"code", record.Code,
 				"error", err.Error(),
 			)
+		}
+	}
+
+	// Story 8.3: Post status to playbook channel if this is a playbook-linked approval
+	if record.PlaybookRunID != "" && p.playbooksClient != nil {
+		message := formatPendingPlaybookStatusMessage(record, approver.Username)
+
+		postID, err := p.playbooksClient.PostPlaybookStatus(record.PlaybookRunID, message, payload.UserId)
+		if err != nil {
+			// Log warning but continue - playbook posting is best effort (AC7)
+			p.API.LogWarn("Failed to post status to playbook channel",
+				"approval_id", record.ID,
+				"code", record.Code,
+				"playbook_run_id", record.PlaybookRunID,
+				"error", err.Error())
+		} else {
+			// Store post ID for future updates (Story 8.5)
+			record.PlaybookPostID = postID
+			if err := kvStore.SaveApproval(record); err != nil {
+				// Log warning but don't fail - status already posted
+				p.API.LogWarn("Failed to update PlaybookPostID in approval record",
+					"approval_id", record.ID,
+					"code", record.Code,
+					"post_id", postID,
+					"error", err.Error())
+			} else {
+				p.API.LogDebug("Posted approval status to playbook channel",
+					"approval_id", record.ID,
+					"code", record.Code,
+					"playbook_run_id", record.PlaybookRunID,
+					"post_id", postID)
+			}
 		}
 	}
 
@@ -553,6 +630,35 @@ func (p *Plugin) handleConfirmDecision(payload *model.SubmitDialogRequest) *mode
 		// successfully, which is what matters (graceful degradation by design).
 	}
 
+	// Story 8.5: Post status update to playbook channel if playbook-linked (best effort, AC8)
+	if updatedRecord.PlaybookRunID != "" && p.playbooksClient != nil {
+		var statusMessage string
+		if updatedRecord.Status == approval.StatusApproved {
+			statusMessage = playbooks.FormatApprovedStatusMessage(updatedRecord)
+		} else {
+			statusMessage = playbooks.FormatDeniedStatusMessage(updatedRecord)
+		}
+
+		// Validate message is not empty before posting
+		if statusMessage != "" {
+			_, err := p.playbooksClient.PostPlaybookStatus(
+				updatedRecord.PlaybookRunID,
+				statusMessage,
+				updatedRecord.RequesterID,
+			)
+			if err != nil {
+				// AC8: Log error but don't block decision processing (graceful degradation)
+				p.API.LogWarn("Failed to post approval status to playbook channel",
+					"approval_id", approvalID,
+					"playbook_run_id", updatedRecord.PlaybookRunID,
+					"status_type", "decision",
+					"decision", decision,
+					"error", err.Error(),
+				)
+			}
+		}
+	}
+
 	// Disable buttons in original DM notification (best effort)
 	if err := p.disableButtonsInDM(record, decision); err != nil {
 		// Log warning but continue - decision already recorded
@@ -789,6 +895,29 @@ func (p *Plugin) handleCancelModalSubmission(payload *model.SubmitDialogRequest)
 			)
 			// Continue - cancellation already recorded, notification is best-effort
 		}
+
+		// Story 8.5: Post cancellation status to playbook channel if playbook-linked (AC3, AC8)
+		if updatedRecord.PlaybookRunID != "" && p.playbooksClient != nil {
+			statusMessage := playbooks.FormatCanceledStatusMessage(updatedRecord)
+
+			// Validate message is not empty before posting
+			if statusMessage != "" {
+				_, err := p.playbooksClient.PostPlaybookStatus(
+					updatedRecord.PlaybookRunID,
+					statusMessage,
+					updatedRecord.RequesterID,
+				)
+				if err != nil {
+					// AC8: Log error but don't block cancellation processing
+					p.API.LogWarn("Failed to post approval status to playbook channel",
+						"approval_code", updatedRecord.Code,
+						"playbook_run_id", updatedRecord.PlaybookRunID,
+						"status_type", "cancellation",
+						"error", err.Error(),
+					)
+				}
+			}
+		}
 	}
 
 	p.API.LogInfo("Approval canceled successfully via modal",
@@ -816,4 +945,30 @@ func (p *Plugin) mapCancellationReason(code string) string {
 	default:
 		return "Unknown reason"
 	}
+}
+
+// formatPendingPlaybookStatusMessage formats the initial "pending" status message for playbook channels
+// Message format: "⏳ **Approval Pending:** [CODE] | [Details] | Waiting for @approver"
+// Details are truncated to 100 characters if longer (Story 8.3: AC2, AC5)
+func formatPendingPlaybookStatusMessage(record *approval.ApprovalRecord, approverUsername string) string {
+	// Handle edge cases for required fields
+	code := record.Code
+	if code == "" {
+		code = "UNKNOWN"
+	}
+
+	username := approverUsername
+	if username == "" {
+		username = "approver"
+	}
+
+	details := record.Description
+	if len(details) > 100 {
+		details = details[:97] + "..."
+	}
+
+	return fmt.Sprintf("⏳ **Approval Pending:** %s | %s | Waiting for @%s",
+		code,
+		details,
+		username)
 }

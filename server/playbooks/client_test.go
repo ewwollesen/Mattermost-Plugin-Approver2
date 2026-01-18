@@ -4,12 +4,14 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 
 	"github.com/mattermost/mattermost/server/public/model"
 	"github.com/mattermost/mattermost/server/public/plugin/plugintest"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
 )
 
@@ -105,15 +107,23 @@ func TestGetPlaybookRunByChannel_ServerError(t *testing.T) {
 	api := &plugintest.API{}
 	// Mock getUserToken to return a test token
 	api.On("KVGet", "user_playbooks_token_testuser").Return([]byte("user-test-token"), nil)
+	// Story 8.6: Mock LogWarn since errors are now logged (graceful degradation AC6)
+	api.On("LogWarn", "Failed to get playbook run",
+		"channel_id", "channel123",
+		"requester_user_id", "testuser",
+		"error", mock.MatchedBy(func(s string) bool {
+			return strings.Contains(s, "playbooks API returned status 500")
+		}),
+		"circuit_state", "closed").Return()
 
 	client := NewClient(api, server.URL)
 
 	run, err := client.GetPlaybookRunByChannel("channel123", "testuser")
 
-	// 5xx should return error
-	assert.Error(t, err)
+	// Story 8.6 AC6: No user-visible errors - errors are logged but not returned
+	assert.NoError(t, err)
 	assert.Nil(t, run)
-	assert.Contains(t, err.Error(), "returned status 500")
+	api.AssertExpectations(t)
 }
 
 func TestGetPlaybookRunByChannel_Timeout(t *testing.T) {
@@ -127,14 +137,21 @@ func TestGetPlaybookRunByChannel_Timeout(t *testing.T) {
 	api := &plugintest.API{}
 	// Mock getUserToken to return a test token
 	api.On("KVGet", "user_playbooks_token_testuser").Return([]byte("user-test-token"), nil)
+	// Story 8.6: Mock LogWarn since timeouts are now logged (graceful degradation AC6)
+	api.On("LogWarn", "Failed to get playbook run",
+		"channel_id", "channel123",
+		"requester_user_id", "testuser",
+		"error", mock.Anything, // Error message contains timeout details
+		"circuit_state", "closed").Return()
 
 	client := NewClient(api, server.URL)
 
 	run, err := client.GetPlaybookRunByChannel("channel123", "testuser")
 
-	// Timeout should return error
-	assert.Error(t, err)
+	// Story 8.6 AC6: No user-visible errors - timeouts are logged but not returned
+	assert.NoError(t, err)
 	assert.Nil(t, run)
+	api.AssertExpectations(t)
 }
 
 func TestGetPlaybookRunByChannel_NetworkError(t *testing.T) {
@@ -142,14 +159,21 @@ func TestGetPlaybookRunByChannel_NetworkError(t *testing.T) {
 	api := &plugintest.API{}
 	// Mock getUserToken to return a test token
 	api.On("KVGet", "user_playbooks_token_testuser").Return([]byte("user-test-token"), nil)
+	// Story 8.6: Mock LogWarn since network errors are now logged (graceful degradation AC6)
+	api.On("LogWarn", "Failed to get playbook run",
+		"channel_id", "channel123",
+		"requester_user_id", "testuser",
+		"error", mock.Anything, // Error message contains network details
+		"circuit_state", "closed").Return()
 
 	client := NewClient(api, "http://invalid-url-that-does-not-exist.local")
 
 	run, err := client.GetPlaybookRunByChannel("channel123", "testuser")
 
-	// Network error should return error
-	assert.Error(t, err)
+	// Story 8.6 AC6: No user-visible errors - network errors are logged but not returned
+	assert.NoError(t, err)
 	assert.Nil(t, run)
+	api.AssertExpectations(t)
 }
 
 func TestGetPlaybookRunByChannel_InvalidJSON(t *testing.T) {
@@ -163,15 +187,23 @@ func TestGetPlaybookRunByChannel_InvalidJSON(t *testing.T) {
 	api := &plugintest.API{}
 	// Mock getUserToken to return a test token
 	api.On("KVGet", "user_playbooks_token_testuser").Return([]byte("user-test-token"), nil)
+	// Story 8.6: Mock LogWarn since JSON decode errors are now logged (graceful degradation AC6)
+	api.On("LogWarn", "Failed to get playbook run",
+		"channel_id", "channel123",
+		"requester_user_id", "testuser",
+		"error", mock.MatchedBy(func(err string) bool {
+			return len(err) > 0 && (len(err) < 100 || err[:20] == "failed to decode res")
+		}),
+		"circuit_state", "closed").Return()
 
 	client := NewClient(api, server.URL)
 
 	run, err := client.GetPlaybookRunByChannel("channel123", "testuser")
 
-	// JSON decode error should return error
-	assert.Error(t, err)
+	// Story 8.6 AC6: No user-visible errors - JSON errors are logged but not returned
+	assert.NoError(t, err)
 	assert.Nil(t, run)
-	assert.Contains(t, err.Error(), "failed to decode")
+	api.AssertExpectations(t)
 }
 
 func TestGetUserToken_ExistingToken(t *testing.T) {
@@ -224,4 +256,204 @@ func TestGetUserToken_CreateTokenError(t *testing.T) {
 	assert.Empty(t, token)
 	assert.Contains(t, err.Error(), "failed to create user access token")
 	api.AssertExpectations(t)
+}
+
+// Story 8.3: Tests for PostPlaybookStatus
+func TestPostPlaybookStatus_Success(t *testing.T) {
+	// Mock server returning 200 OK with post ID
+	expectedPostID := "post123"
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// Verify endpoint and method
+		assert.Contains(t, r.URL.Path, "/plugins/playbooks/api/v0/runs/")
+		assert.Contains(t, r.URL.Path, "/status")
+		assert.Equal(t, "POST", r.Method)
+
+		// Verify authorization header
+		authHeader := r.Header.Get("Authorization")
+		assert.Equal(t, "Bearer user-test-token", authHeader)
+
+		// Verify content type
+		contentType := r.Header.Get("Content-Type")
+		assert.Equal(t, "application/json", contentType)
+
+		// Verify request body
+		var body map[string]any
+		err := json.NewDecoder(r.Body).Decode(&body)
+		require.NoError(t, err)
+		assert.Contains(t, body["message"], "Approval Pending")
+
+		// Verify reminder field is present and reasonable (within next 48 hours)
+		reminder, ok := body["reminder"].(float64) // JSON numbers decode as float64
+		assert.True(t, ok, "reminder should be a number")
+		now := time.Now().UnixMilli()
+		assert.Greater(t, int64(reminder), now, "reminder should be in the future")
+		assert.Less(t, int64(reminder), now+48*60*60*1000, "reminder should be within 48 hours")
+
+		// Return success response with post ID
+		w.WriteHeader(http.StatusOK)
+		response := map[string]string{"id": expectedPostID}
+		_ = json.NewEncoder(w).Encode(response)
+	}))
+	defer server.Close()
+
+	api := &plugintest.API{}
+	api.On("KVGet", "user_playbooks_token_user123").Return([]byte("user-test-token"), nil)
+
+	client := NewClient(api, server.URL)
+
+	postID, err := client.PostPlaybookStatus("run123", "⏳ **Approval Pending:** A-TEST | Deploy to prod | Waiting for @jane", "user123")
+
+	require.NoError(t, err)
+	assert.Equal(t, expectedPostID, postID)
+	api.AssertExpectations(t)
+}
+
+func TestPostPlaybookStatus_APIError(t *testing.T) {
+	// Mock server returning 500 Internal Server Error
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusInternalServerError)
+	}))
+	defer server.Close()
+
+	api := &plugintest.API{}
+	api.On("KVGet", "user_playbooks_token_user123").Return([]byte("user-test-token"), nil)
+	// Story 8.6: Mock LogWarn since errors are now logged (graceful degradation AC6)
+	api.On("LogWarn", "Failed to post playbook status",
+		"run_id", "run123",
+		"requester_user_id", "user123",
+		"error", mock.MatchedBy(func(s string) bool {
+			return strings.Contains(s, "playbooks API returned status 500")
+		}),
+		"circuit_state", "closed").Return()
+
+	client := NewClient(api, server.URL)
+
+	postID, err := client.PostPlaybookStatus("run123", "Test message", "user123")
+
+	// Story 8.6 AC6: No user-visible errors - errors are logged but not returned
+	assert.NoError(t, err)
+	assert.Empty(t, postID)
+	api.AssertExpectations(t)
+}
+
+func TestPostPlaybookStatus_InvalidJSON(t *testing.T) {
+	// Mock server returning invalid JSON
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte("invalid json {{{"))
+	}))
+	defer server.Close()
+
+	api := &plugintest.API{}
+	api.On("KVGet", "user_playbooks_token_user123").Return([]byte("user-test-token"), nil)
+	// Story 8.6: Mock LogWarn since JSON decode errors are now logged (graceful degradation AC6)
+	api.On("LogWarn", "Failed to post playbook status",
+		"run_id", "run123",
+		"requester_user_id", "user123",
+		"error", mock.Anything, // Error message contains JSON decode details
+		"circuit_state", "closed").Return()
+
+	client := NewClient(api, server.URL)
+
+	postID, err := client.PostPlaybookStatus("run123", "Test message", "user123")
+
+	// Story 8.6 AC6: No user-visible errors - JSON errors are logged but not returned
+	assert.NoError(t, err)
+	assert.Empty(t, postID)
+	api.AssertExpectations(t)
+}
+
+func TestPostPlaybookStatus_TokenError(t *testing.T) {
+	api := &plugintest.API{}
+	api.On("KVGet", "user_playbooks_token_user123").Return(nil, nil)
+	api.On("CreateUserAccessToken", &model.UserAccessToken{
+		UserId:      "user123",
+		Description: "Approver Plugin - Playbooks API Access",
+	}).Return(nil, &model.AppError{Message: "permission denied"})
+	// Story 8.6: Mock LogWarn since token errors are now logged (graceful degradation AC6)
+	api.On("LogWarn", "Failed to post playbook status",
+		"run_id", "run123",
+		"requester_user_id", "user123",
+		"error", mock.Anything, // Error message contains token error details
+		"circuit_state", "closed").Return()
+
+	client := NewClient(api, "http://localhost")
+
+	postID, err := client.PostPlaybookStatus("run123", "Test message", "user123")
+
+	// Story 8.6 AC6: No user-visible errors - token errors are logged but not returned
+	assert.NoError(t, err)
+	assert.Empty(t, postID)
+	api.AssertExpectations(t)
+}
+
+func TestPostPlaybookStatus_NetworkError(t *testing.T) {
+	// Invalid URL to simulate network error
+	api := &plugintest.API{}
+	api.On("KVGet", "user_playbooks_token_user123").Return([]byte("user-test-token"), nil)
+	// Story 8.6: Mock LogWarn since network errors are now logged (graceful degradation AC6)
+	api.On("LogWarn", "Failed to post playbook status",
+		"run_id", "run123",
+		"requester_user_id", "user123",
+		"error", mock.Anything, // Error message contains network details
+		"circuit_state", "closed").Return()
+
+	client := NewClient(api, "http://invalid-url-that-does-not-exist.local")
+
+	postID, err := client.PostPlaybookStatus("run123", "Test message", "user123")
+
+	// Story 8.6 AC6: No user-visible errors - network errors are logged but not returned
+	assert.NoError(t, err)
+	assert.Empty(t, postID)
+	api.AssertExpectations(t)
+}
+
+// Story 8.6 Code Review: Integration test for circuit breaker + metrics
+func TestCircuitBreakerMetricsIntegration(t *testing.T) {
+	// Test that circuit breaker state is properly tracked in metrics
+	// This ensures the integration between these components works correctly
+
+	// Create mock server that always fails
+	failureCount := 0
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		failureCount++
+		w.WriteHeader(http.StatusInternalServerError)
+	}))
+	defer server.Close()
+
+	api := &plugintest.API{}
+	api.On("KVGet", "user_playbooks_token_user123").Return([]byte("test-token"), nil)
+	// Mock all log calls with flexible arg counts
+	api.On("LogWarn", mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything).Maybe().Return()
+	api.On("LogWarn", mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything).Maybe().Return()
+	api.On("LogDebug", mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything).Maybe().Return()
+	api.On("LogDebug", mock.Anything, mock.Anything, mock.Anything, mock.Anything).Maybe().Return()
+	api.On("LogInfo", mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything).Maybe().Return()
+	api.On("LogInfo", mock.Anything, mock.Anything, mock.Anything).Maybe().Return()
+
+	client := NewClient(api, server.URL)
+
+	// Make 5 calls to trigger circuit breaker (threshold = 5)
+	for i := 0; i < 5; i++ {
+		_, _ = client.GetPlaybookRunByChannel("channel123", "user123")
+	}
+
+	// Verify metrics recorded all 5 failures
+	metrics := client.metrics.GetSnapshot()
+	assert.Equal(t, int64(5), metrics.DetectionCalls)
+	assert.Equal(t, int64(0), metrics.DetectionSuccess)
+	assert.Equal(t, int64(5), metrics.DetectionFailed)
+
+	// Verify circuit breaker state is Open in metrics
+	assert.Equal(t, CircuitOpen, metrics.CircuitBreakerState)
+	assert.Equal(t, int64(1), metrics.CircuitBreakerOpens)
+
+	// Verify circuit breaker actually opened (next call should not hit server)
+	currentFailureCount := failureCount
+	_, _ = client.GetPlaybookRunByChannel("channel123", "user123")
+	assert.Equal(t, currentFailureCount, failureCount, "Circuit breaker should prevent API call")
+
+	// Verify metrics still show circuit as open
+	metricsAfter := client.metrics.GetSnapshot()
+	assert.Equal(t, CircuitOpen, metricsAfter.CircuitBreakerState)
 }

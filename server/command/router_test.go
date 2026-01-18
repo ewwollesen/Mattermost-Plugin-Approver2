@@ -2496,6 +2496,16 @@ func (m *mockPlaybooksClient) GetPlaybookRunByChannel(channelID string, requeste
 	return args.Get(0).(*playbooks.PlaybookRun), args.Error(1)
 }
 
+func (m *mockPlaybooksClient) PostPlaybookStatus(runID string, message string, requesterUserID string) (string, error) {
+	args := m.Called(runID, message, requesterUserID)
+	return args.String(0), args.Error(1)
+}
+
+func (m *mockPlaybooksClient) GetMetrics() playbooks.Metrics {
+	args := m.Called()
+	return args.Get(0).(playbooks.Metrics)
+}
+
 func TestExecuteNew_PlaybookIntegration(t *testing.T) {
 	t.Run("playbook detection succeeds - logs context and continues normally", func(t *testing.T) {
 		api := &plugintest.API{}

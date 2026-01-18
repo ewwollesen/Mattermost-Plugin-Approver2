@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/mattermost/mattermost-plugin-approver2/server/approval"
+	"github.com/mattermost/mattermost-plugin-approver2/server/playbooks"
 	"github.com/mattermost/mattermost-plugin-approver2/server/store"
 	"github.com/mattermost/mattermost/server/public/model"
 	"github.com/mattermost/mattermost/server/public/plugin/plugintest"
@@ -21,7 +22,7 @@ func TestNewChecker(t *testing.T) {
 	mockService := approval.NewService(mockStore, mockAPI, "bot123")
 	botUserID := "bot123"
 
-	checker := NewChecker(mockStore, mockService, mockAPI, botUserID)
+	checker := NewChecker(mockStore, mockService, mockAPI, botUserID, nil)
 
 	assert.NotNil(t, checker)
 	assert.Equal(t, mockStore, checker.store)
@@ -40,7 +41,7 @@ func TestStartStop(t *testing.T) {
 	// Mock LogInfo for lifecycle messages
 	mockAPI.On("LogInfo", mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return()
 
-	checker := NewChecker(mockStore, mockService, mockAPI, "bot123")
+	checker := NewChecker(mockStore, mockService, mockAPI, "bot123", nil)
 
 	// Start checker
 	checker.Start()
@@ -75,7 +76,7 @@ func TestCheckTimeoutsNoIndexKeys(t *testing.T) {
 	// Mock LogDebug with all expected arguments (variadic keyvals)
 	mockAPI.On("LogDebug", "Completed timeout scan", mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return()
 
-	checker := NewChecker(mockStore, mockService, mockAPI, "bot123")
+	checker := NewChecker(mockStore, mockService, mockAPI, "bot123", nil)
 
 	err := checker.checkTimeouts()
 
@@ -113,7 +114,7 @@ func TestCheckTimeoutsSkipsNonPendingRequests(t *testing.T) {
 	// Mock LogDebug with all expected arguments (variadic keyvals)
 	mockAPI.On("LogDebug", "Completed timeout scan", mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return()
 
-	checker := NewChecker(mockStore, mockService, mockAPI, "bot123")
+	checker := NewChecker(mockStore, mockService, mockAPI, "bot123", nil)
 
 	err := checker.checkTimeouts()
 
@@ -152,7 +153,7 @@ func TestCheckTimeoutsSkipsNewRequests(t *testing.T) {
 	// Mock LogDebug with all expected arguments (variadic keyvals)
 	mockAPI.On("LogDebug", "Completed timeout scan", mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return()
 
-	checker := NewChecker(mockStore, mockService, mockAPI, "bot123")
+	checker := NewChecker(mockStore, mockService, mockAPI, "bot123", nil)
 
 	err := checker.checkTimeouts()
 
@@ -249,10 +250,202 @@ func TestCheckTimeoutsHappyPath(t *testing.T) {
 	mockAPI.On("LogDebug", "Processing timed-out requests", mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return()
 	mockAPI.On("LogDebug", "Completed timeout scan", mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return()
 
-	checker := NewChecker(mockStore, mockService, mockAPI, "bot123")
+	checker := NewChecker(mockStore, mockService, mockAPI, "bot123", nil)
 
 	err := checker.checkTimeouts()
 
+	assert.NoError(t, err)
+	mockAPI.AssertExpectations(t)
+}
+
+// MockPlaybooksClient is a mock implementation of playbooks.ClientInterface for testing
+type MockPlaybooksClient struct {
+	mock.Mock
+}
+
+func (m *MockPlaybooksClient) GetPlaybookRunByChannel(channelID string, requesterUserID string) (*playbooks.PlaybookRun, error) {
+	args := m.Called(channelID, requesterUserID)
+	if args.Get(0) == nil {
+		return nil, args.Error(1)
+	}
+	return args.Get(0).(*playbooks.PlaybookRun), args.Error(1)
+}
+
+func (m *MockPlaybooksClient) PostPlaybookStatus(runID string, message string, requesterUserID string) (string, error) {
+	args := m.Called(runID, message, requesterUserID)
+	return args.String(0), args.Error(1)
+}
+
+func (m *MockPlaybooksClient) GetMetrics() playbooks.Metrics {
+	args := m.Called()
+	return args.Get(0).(playbooks.Metrics)
+}
+
+// Story 8.5: Integration test for timeout flow posting to playbook channel
+func TestCheckTimeouts_PostsToPlaybookChannel(t *testing.T) {
+	mockAPI := &plugintest.API{}
+	mockStore := store.NewKVStore(mockAPI)
+	mockService := approval.NewService(mockStore, mockAPI, "bot123")
+	mockPlaybooksClient := &MockPlaybooksClient{}
+
+	// Create timed-out approval with playbook context
+	timedOutRecord := &approval.ApprovalRecord{
+		ID:                 "approval789",
+		Code:               "T-TEST01",
+		RequesterID:        "req123",
+		RequesterUsername:  "requester",
+		ApproverID:         "app456",
+		ApproverUsername:   "approver",
+		Description:        "Test timeout approval",
+		Status:             approval.StatusPending,
+		CreatedAt:          time.Now().Add(-35 * time.Minute).UnixMilli(),
+		NotificationPostID: "post789",
+		PlaybookRunID:      "playbook_run_999",
+		PlaybookChannelID:  "channel999",
+		PlaybookName:       "Test Playbook Run",
+	}
+
+	recordJSON, _ := json.Marshal(timedOutRecord)
+
+	// Mock KVList to return approver index key
+	indexKey := "approval:index:approver:app456:0000000000001:approval789"
+	mockAPI.On("KVList", 0, store.MaxApprovalRecordsLimit).Return([]string{indexKey}, nil)
+
+	// Mock KVGet for index key (returns record ID as JSON)
+	recordIDJSON := []byte(`"approval789"`)
+	mockAPI.On("KVGet", indexKey).Return(recordIDJSON, nil)
+
+	// Mock KVGet for record - return pending record 3 times:
+	// 1. GetPendingRequestsOlderThan loads the record
+	// 2. CancelApprovalByID → GetApproval loads it
+	// 3. SaveApproval → GetApproval (immutability check) loads it
+	mockAPI.On("KVGet", "approval:record:approval789").Return(recordJSON, nil).Times(3)
+
+	// Mock SaveApproval KVSet calls (CancelApprovalByID triggers SaveApproval)
+	mockAPI.On("KVSet", "approval:record:approval789", mock.Anything).Return(nil).Once()
+	mockAPI.On("KVSet", "approval:code:T-TEST01", mock.Anything).Return(nil).Once()
+	mockAPI.On("KVSet", mock.MatchedBy(func(key string) bool {
+		return strings.HasPrefix(key, "approval:index:requester:")
+	}), mock.Anything).Return(nil).Once()
+	mockAPI.On("KVSet", mock.MatchedBy(func(key string) bool {
+		return strings.HasPrefix(key, "approval:index:approver:")
+	}), mock.Anything).Return(nil).Once()
+
+	// Mock canceled record reload after SaveApproval
+	canceledRecord := *timedOutRecord
+	canceledRecord.Status = approval.StatusCanceled
+	canceledRecord.CanceledReason = "Timed out"
+	canceledRecord.CanceledAt = time.Now().UnixMilli()
+	canceledJSON, _ := json.Marshal(&canceledRecord)
+	mockAPI.On("KVGet", "approval:record:approval789").Return(canceledJSON, nil).Once()
+
+	// Mock timeout notification
+	mockAPI.On("GetDirectChannel", "bot123", "req123").Return(&model.Channel{Id: "dm123"}, nil)
+	mockAPI.On("CreatePost", mock.Anything).Return(&model.Post{Id: "post456"}, nil)
+
+	// Mock UpdatePost for disabling buttons
+	mockAPI.On("GetPost", mock.Anything).Return(&model.Post{Id: "post123", Props: model.StringInterface{}}, nil)
+	mockAPI.On("UpdatePost", mock.Anything).Return(&model.Post{}, nil)
+
+	// Story 8.5: Mock PostPlaybookStatus - verify it's called with timeout message
+	mockPlaybooksClient.On("PostPlaybookStatus",
+		"playbook_run_999",
+		mock.MatchedBy(func(msg string) bool {
+			return strings.Contains(msg, "⏱️") &&
+				strings.Contains(msg, "**Timeout:**") &&
+				strings.Contains(msg, "T-TEST01") &&
+				strings.Contains(msg, "No response from @approver")
+		}),
+		"req123",
+	).Return("playbook_post_123", nil)
+
+	// Mock logging calls with sufficient variadic arguments
+	mockAPI.On("LogInfo", mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything).Maybe()
+	mockAPI.On("LogDebug", mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything).Maybe()
+	mockAPI.On("LogWarn", mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything).Maybe()
+	mockAPI.On("LogError", mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything).Maybe()
+
+	checker := NewChecker(mockStore, mockService, mockAPI, "bot123", mockPlaybooksClient)
+
+	err := checker.checkTimeouts()
+
+	assert.NoError(t, err)
+	mockPlaybooksClient.AssertExpectations(t)
+	mockAPI.AssertExpectations(t)
+}
+
+// Story 8.5: Test that timeout flow handles nil playbooksClient gracefully
+func TestCheckTimeouts_NilPlaybooksClient(t *testing.T) {
+	mockAPI := &plugintest.API{}
+	mockStore := store.NewKVStore(mockAPI)
+	mockService := approval.NewService(mockStore, mockAPI, "bot123")
+
+	// Create timed-out approval with playbook context
+	timedOutRecord := &approval.ApprovalRecord{
+		ID:                 "approval888",
+		Code:               "T-TEST02",
+		RequesterID:        "req123",
+		RequesterUsername:  "requester",
+		ApproverID:         "app456",
+		ApproverUsername:   "approver",
+		Description:        "Test timeout with nil client",
+		Status:             approval.StatusPending,
+		CreatedAt:          time.Now().Add(-35 * time.Minute).UnixMilli(),
+		NotificationPostID: "post888",
+		PlaybookRunID:      "playbook_run_888",
+		PlaybookChannelID:  "channel888",
+		PlaybookName:       "Test Playbook",
+	}
+
+	recordJSON, _ := json.Marshal(timedOutRecord)
+
+	// Mock KVList to return approver index key
+	indexKey := "approval:index:approver:app456:0000000000001:approval888"
+	mockAPI.On("KVList", 0, store.MaxApprovalRecordsLimit).Return([]string{indexKey}, nil)
+
+	// Mock KVGet for index key (returns record ID as JSON)
+	recordIDJSON := []byte(`"approval888"`)
+	mockAPI.On("KVGet", indexKey).Return(recordIDJSON, nil)
+
+	// Mock KVGet for record - return pending record 3 times:
+	// 1. GetPendingRequestsOlderThan loads the record
+	// 2. CancelApprovalByID → GetApproval loads it
+	// 3. SaveApproval → GetApproval (immutability check) loads it
+	mockAPI.On("KVGet", "approval:record:approval888").Return(recordJSON, nil).Times(3)
+
+	// Mock SaveApproval KVSet calls (CancelApprovalByID triggers SaveApproval)
+	mockAPI.On("KVSet", "approval:record:approval888", mock.Anything).Return(nil).Once()
+	mockAPI.On("KVSet", "approval:code:T-TEST02", mock.Anything).Return(nil).Once()
+	mockAPI.On("KVSet", mock.MatchedBy(func(key string) bool {
+		return strings.HasPrefix(key, "approval:index:requester:")
+	}), mock.Anything).Return(nil).Once()
+	mockAPI.On("KVSet", mock.MatchedBy(func(key string) bool {
+		return strings.HasPrefix(key, "approval:index:approver:")
+	}), mock.Anything).Return(nil).Once()
+
+	// Mock canceled record reload after SaveApproval
+	canceledRecord := *timedOutRecord
+	canceledRecord.Status = approval.StatusCanceled
+	canceledRecord.CanceledReason = "Timed out"
+	canceledJSON, _ := json.Marshal(&canceledRecord)
+	mockAPI.On("KVGet", "approval:record:approval888").Return(canceledJSON, nil).Once()
+
+	mockAPI.On("GetDirectChannel", "bot123", "req123").Return(&model.Channel{Id: "dm123"}, nil)
+	mockAPI.On("CreatePost", mock.Anything).Return(&model.Post{}, nil)
+	mockAPI.On("GetPost", mock.Anything).Return(&model.Post{Props: model.StringInterface{}}, nil)
+	mockAPI.On("UpdatePost", mock.Anything).Return(&model.Post{}, nil)
+
+	// Mock logging calls with sufficient variadic arguments
+	mockAPI.On("LogInfo", mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything).Maybe()
+	mockAPI.On("LogDebug", mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything).Maybe()
+	mockAPI.On("LogWarn", mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything).Maybe()
+
+	// Pass nil as playbooksClient - should not panic
+	checker := NewChecker(mockStore, mockService, mockAPI, "bot123", nil)
+
+	err := checker.checkTimeouts()
+
+	// Should complete successfully without attempting to post to playbook
 	assert.NoError(t, err)
 	mockAPI.AssertExpectations(t)
 }

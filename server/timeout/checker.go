@@ -7,6 +7,7 @@ import (
 
 	"github.com/mattermost/mattermost-plugin-approver2/server/approval"
 	"github.com/mattermost/mattermost-plugin-approver2/server/notifications"
+	"github.com/mattermost/mattermost-plugin-approver2/server/playbooks"
 	"github.com/mattermost/mattermost-plugin-approver2/server/store"
 	"github.com/mattermost/mattermost/server/public/plugin"
 )
@@ -21,23 +22,25 @@ const DefaultTimeoutDuration = 30 * time.Minute // Hardcoded for MVP
 // TimeoutChecker periodically scans for timed-out pending approval requests
 // and automatically cancels them with notification to the requester.
 type TimeoutChecker struct {
-	store     *store.KVStore
-	service   *approval.Service
-	api       plugin.API
-	botUserID string
-	ctx       context.Context
-	cancel    context.CancelFunc
-	done      chan struct{}
+	store           *store.KVStore
+	service         *approval.Service
+	api             plugin.API
+	botUserID       string
+	playbooksClient playbooks.ClientInterface // Story 8.5: For posting timeout status to playbook channels
+	ctx             context.Context
+	cancel          context.CancelFunc
+	done            chan struct{}
 }
 
 // NewChecker creates a new TimeoutChecker instance.
-func NewChecker(store *store.KVStore, service *approval.Service, api plugin.API, botUserID string) *TimeoutChecker {
+func NewChecker(store *store.KVStore, service *approval.Service, api plugin.API, botUserID string, playbooksClient playbooks.ClientInterface) *TimeoutChecker {
 	return &TimeoutChecker{
-		store:     store,
-		service:   service,
-		api:       api,
-		botUserID: botUserID,
-		done:      make(chan struct{}),
+		store:           store,
+		service:         service,
+		api:             api,
+		botUserID:       botUserID,
+		playbooksClient: playbooksClient,
+		done:            make(chan struct{}),
 	}
 }
 
@@ -159,6 +162,29 @@ func (tc *TimeoutChecker) checkTimeouts() error {
 				"post_id", updatedRecord.NotificationPostID,
 				"error", err.Error())
 			// Continue - post update failure doesn't affect cancellation
+		}
+
+		// Story 8.5: Post timeout status to playbook channel if playbook-linked (AC4, AC8)
+		if updatedRecord.PlaybookRunID != "" && tc.playbooksClient != nil {
+			statusMessage := playbooks.FormatTimedOutStatusMessage(updatedRecord)
+
+			// Validate message is not empty before posting
+			if statusMessage != "" {
+				_, err := tc.playbooksClient.PostPlaybookStatus(
+					updatedRecord.PlaybookRunID,
+					statusMessage,
+					updatedRecord.RequesterID,
+				)
+				if err != nil {
+					// AC8: Log error but don't block timeout processing
+					tc.api.LogWarn("Failed to post approval status to playbook channel",
+						"approval_id", record.ID,
+						"approval_code", record.Code,
+						"playbook_run_id", updatedRecord.PlaybookRunID,
+						"status_type", "timeout",
+						"error", err.Error())
+				}
+			}
 		}
 	}
 
