@@ -165,24 +165,43 @@ func (tc *TimeoutChecker) checkTimeouts() error {
 		}
 
 		// Story 8.5: Post timeout status to playbook channel if playbook-linked (AC4, AC8)
+		// GitHub Issue #2: UPDATE existing post instead of creating new ones (like DM behavior)
 		if updatedRecord.PlaybookRunID != "" && tc.playbooksClient != nil {
 			statusMessage := playbooks.FormatTimedOutStatusMessage(updatedRecord)
 
 			// Validate message is not empty before posting
 			if statusMessage != "" {
-				_, err := tc.playbooksClient.PostPlaybookStatus(
-					updatedRecord.PlaybookRunID,
-					statusMessage,
-					updatedRecord.RequesterID,
-				)
-				if err != nil {
-					// AC8: Log error but don't block timeout processing
-					tc.api.LogWarn("Failed to post approval status to playbook channel",
-						"approval_id", record.ID,
-						"approval_code", record.Code,
-						"playbook_run_id", updatedRecord.PlaybookRunID,
-						"status_type", "timeout",
-						"error", err.Error())
+				// Update existing post if we have the ID, otherwise create new one
+				if updatedRecord.PlaybookPostID != "" {
+					err := tc.playbooksClient.UpdateMessageInPlaybookChannel(
+						updatedRecord.PlaybookChannelID,
+						updatedRecord.PlaybookPostID,
+						statusMessage,
+					)
+					if err != nil {
+						// AC8: Log error but don't block timeout processing
+						tc.api.LogWarn("Failed to update playbook status",
+							"approval_id", record.ID,
+							"approval_code", record.Code,
+							"playbook_run_id", updatedRecord.PlaybookRunID,
+							"playbook_post_id", updatedRecord.PlaybookPostID,
+							"status_type", "timeout",
+							"error", err.Error())
+					}
+				} else {
+					// Fallback: create new post if we don't have the original post ID
+					_, err := tc.playbooksClient.PostMessageToPlaybookChannel(
+						updatedRecord.PlaybookChannelID,
+						statusMessage,
+					)
+					if err != nil {
+						tc.api.LogWarn("Failed to post approval status to playbook channel",
+							"approval_id", record.ID,
+							"approval_code", record.Code,
+							"playbook_run_id", updatedRecord.PlaybookRunID,
+							"status_type", "timeout",
+							"error", err.Error())
+					}
 				}
 			}
 		}

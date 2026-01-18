@@ -2496,9 +2496,14 @@ func (m *mockPlaybooksClient) GetPlaybookRunByChannel(channelID string, requeste
 	return args.Get(0).(*playbooks.PlaybookRun), args.Error(1)
 }
 
-func (m *mockPlaybooksClient) PostPlaybookStatus(runID string, message string, requesterUserID string) (string, error) {
-	args := m.Called(runID, message, requesterUserID)
+func (m *mockPlaybooksClient) PostMessageToPlaybookChannel(channelID string, message string) (string, error) {
+	args := m.Called(channelID, message)
 	return args.String(0), args.Error(1)
+}
+
+func (m *mockPlaybooksClient) UpdateMessageInPlaybookChannel(channelID string, postID string, message string) error {
+	args := m.Called(channelID, postID, message)
+	return args.Error(0)
 }
 
 func (m *mockPlaybooksClient) GetMetrics() playbooks.Metrics {

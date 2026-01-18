@@ -271,9 +271,14 @@ func (m *MockPlaybooksClient) GetPlaybookRunByChannel(channelID string, requeste
 	return args.Get(0).(*playbooks.PlaybookRun), args.Error(1)
 }
 
-func (m *MockPlaybooksClient) PostPlaybookStatus(runID string, message string, requesterUserID string) (string, error) {
-	args := m.Called(runID, message, requesterUserID)
+func (m *MockPlaybooksClient) PostMessageToPlaybookChannel(channelID string, message string) (string, error) {
+	args := m.Called(channelID, message)
 	return args.String(0), args.Error(1)
+}
+
+func (m *MockPlaybooksClient) UpdateMessageInPlaybookChannel(channelID string, postID string, message string) error {
+	args := m.Called(channelID, postID, message)
+	return args.Error(0)
 }
 
 func (m *MockPlaybooksClient) GetMetrics() playbooks.Metrics {
@@ -347,16 +352,16 @@ func TestCheckTimeouts_PostsToPlaybookChannel(t *testing.T) {
 	mockAPI.On("GetPost", mock.Anything).Return(&model.Post{Id: "post123", Props: model.StringInterface{}}, nil)
 	mockAPI.On("UpdatePost", mock.Anything).Return(&model.Post{}, nil)
 
-	// Story 8.5: Mock PostPlaybookStatus - verify it's called with timeout message
-	mockPlaybooksClient.On("PostPlaybookStatus",
-		"playbook_run_999",
+	// Story 8.5 / GitHub Issue #2: Mock PostMessageToPlaybookChannel - verify it posts timeout message
+	// Since timedOutRecord doesn't have PlaybookPostID set, it will fallback to POST
+	mockPlaybooksClient.On("PostMessageToPlaybookChannel",
+		"channel999",
 		mock.MatchedBy(func(msg string) bool {
 			return strings.Contains(msg, "⏱️") &&
-				strings.Contains(msg, "**Timeout:**") &&
+				strings.Contains(msg, "Timed Out") &&
 				strings.Contains(msg, "T-TEST01") &&
-				strings.Contains(msg, "No response from @approver")
+				strings.Contains(msg, "@approver")
 		}),
-		"req123",
 	).Return("playbook_post_123", nil)
 
 	// Mock logging calls with sufficient variadic arguments

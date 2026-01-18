@@ -10,7 +10,6 @@
 package playbooks
 
 import (
-	"bytes"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -45,7 +44,8 @@ const (
 // This interface is implemented by Client and can be mocked for testing
 type ClientInterface interface {
 	GetPlaybookRunByChannel(channelID string, requesterUserID string) (*PlaybookRun, error)
-	PostPlaybookStatus(runID string, message string, requesterUserID string) (string, error)
+	PostMessageToPlaybookChannel(channelID string, message string) (string, error)
+	UpdateMessageInPlaybookChannel(channelID string, postID string, message string) error
 	GetMetrics() Metrics
 }
 
@@ -54,19 +54,22 @@ type ClientInterface interface {
 type Client struct {
 	api            plugin.API
 	siteURL        string
+	botUserID      string
 	circuitBreaker *CircuitBreaker
 	metrics        *Metrics
 }
 
 // NewClient creates a new Playbooks API client
 // Story 8.6: Circuit breaker prevents repeated failures (5 failures, 5-minute timeout)
-func NewClient(api plugin.API, siteURL string) *Client {
+// GitHub Issue #2: Added botUserID for posting messages as the bot
+func NewClient(api plugin.API, siteURL string, botUserID string) *Client {
 	cb := NewCircuitBreaker(5, 5*time.Minute)
 	cb.SetLogger(api) // Enable circuit breaker state change logging
 
 	return &Client{
 		api:            api,
 		siteURL:        siteURL,
+		botUserID:      botUserID,
 		circuitBreaker: cb,
 		metrics:        NewMetrics(),
 	}
@@ -215,17 +218,17 @@ func (c *Client) getPlaybookRunByChannelInternal(channelID string, requesterUser
 	return &run, nil
 }
 
-// PostPlaybookStatus posts a status update message to a playbook run's channel
-// Returns the post ID of the created status post for future updates
-// Story 8.6: Enhanced with circuit breaker and metrics (AC2, AC3, AC4, AC5, AC6, AC7, AC9)
-func (c *Client) PostPlaybookStatus(runID string, message string, requesterUserID string) (string, error) {
+// PostMessageToPlaybookChannel posts a message to a playbook channel using standard CreatePost
+// GitHub Issue #2: Using CreatePost with markdown tables for nice formatting without Playbooks API side effects
+// Returns the post ID for future updates
+func (c *Client) PostMessageToPlaybookChannel(channelID string, message string) (string, error) {
 	startTime := time.Now()
 	var postID string
 	var callErr error
 
 	// Wrap in circuit breaker to prevent repeated failures
 	err := c.circuitBreaker.Call(func() error {
-		postID, callErr = c.postPlaybookStatusInternal(runID, message, requesterUserID)
+		postID, callErr = c.postMessageToPlaybookChannelInternal(channelID, message)
 		return callErr
 	})
 
@@ -237,17 +240,16 @@ func (c *Client) PostPlaybookStatus(runID string, message string, requesterUserI
 
 	// Handle circuit breaker open state (AC7)
 	if err != nil && err.Error() == "circuit breaker is open" {
-		c.api.LogDebug("Playbooks circuit breaker is open, skipping status post",
-			"run_id", runID,
+		c.api.LogDebug("Playbooks circuit breaker is open, skipping channel post",
+			"channel_id", channelID,
 			"failure_count", c.circuitBreaker.GetFailureCount())
 		return "", nil // Fail gracefully (AC6)
 	}
 
 	// Handle API errors gracefully (AC2, AC3, AC4, AC5, AC6)
 	if callErr != nil {
-		c.api.LogWarn("Failed to post playbook status",
-			"run_id", runID,
-			"requester_user_id", requesterUserID,
+		c.api.LogWarn("Failed to post message to playbook channel",
+			"channel_id", channelID,
 			"error", callErr.Error(),
 			"circuit_state", c.circuitBreaker.GetState().String())
 		return "", nil // Don't propagate error (AC6)
@@ -256,79 +258,83 @@ func (c *Client) PostPlaybookStatus(runID string, message string, requesterUserI
 	return postID, nil
 }
 
-// postPlaybookStatusInternal is the internal implementation that performs the actual API call
-func (c *Client) postPlaybookStatusInternal(runID string, message string, requesterUserID string) (string, error) {
-	url := fmt.Sprintf("%s/plugins/playbooks/api/v0/runs/%s/status",
-		c.siteURL, runID)
-
-	// Prepare request body
-	// Playbooks API requires reminder field (milliseconds from epoch) - cannot be 0
-	// Set to 24 hours from now as a reasonable default for approval follow-up
-	// Rationale: Most approvals should be resolved within 24h; this creates a playbook
-	// reminder to check on pending approvals that may be blocking progress
-	reminderTime := time.Now().Add(24 * time.Hour).UnixMilli()
-	requestBody := map[string]any{
-		"message":  message,
-		"reminder": reminderTime,
-	}
-	bodyBytes, err := json.Marshal(requestBody)
-	if err != nil {
-		return "", fmt.Errorf("failed to marshal request body: %w", err)
+// postMessageToPlaybookChannelInternal is the internal implementation that posts a message
+// GitHub Issue #2: Using CreatePost with markdown tables for nice formatting without Playbooks API side effects
+func (c *Client) postMessageToPlaybookChannelInternal(channelID string, message string) (string, error) {
+	post := &model.Post{
+		UserId:    c.botUserID,
+		ChannelId: channelID,
+		Message:   message, // Contains markdown table
 	}
 
-	req, err := http.NewRequest("POST", url, bytes.NewBuffer(bodyBytes))
-	if err != nil {
-		return "", fmt.Errorf("failed to create request: %w", err)
+	createdPost, appErr := c.api.CreatePost(post)
+	if appErr != nil {
+		return "", fmt.Errorf("failed to create post: %w", appErr)
 	}
 
-	// Get user token for authentication (requester's context)
-	userToken, err := c.getUserToken(requesterUserID)
-	if err != nil {
-		return "", fmt.Errorf("failed to get user token: %w", err)
+	return createdPost.Id, nil
+}
+
+// UpdateMessageInPlaybookChannel updates an existing post in the playbook channel
+// Used to update the original status post when approval state changes (like DM behavior)
+// GitHub Issue #2: Using UpdatePost instead of Playbooks API
+func (c *Client) UpdateMessageInPlaybookChannel(channelID string, postID string, message string) error {
+	startTime := time.Now()
+	var callErr error
+
+	// Wrap in circuit breaker to prevent repeated failures
+	err := c.circuitBreaker.Call(func() error {
+		callErr = c.updateMessageInPlaybookChannelInternal(channelID, postID, message)
+		return callErr
+	})
+
+	// Record metrics
+	latency := time.Since(startTime)
+	success := err == nil && callErr == nil
+	c.metrics.RecordStatusPost(success, latency)
+	c.metrics.UpdateCircuitBreakerState(c.circuitBreaker.GetState())
+
+	// Handle circuit breaker open state (AC7)
+	if err != nil && err.Error() == "circuit breaker is open" {
+		c.api.LogDebug("Playbooks circuit breaker is open, skipping post update",
+			"channel_id", channelID,
+			"post_id", postID,
+			"failure_count", c.circuitBreaker.GetFailureCount())
+		return nil // Fail gracefully (AC6)
 	}
 
-	// Set headers
-	req.Header.Set("Authorization", "Bearer "+userToken)
-	req.Header.Set("Content-Type", "application/json")
-
-	// 1s timeout - write operations may take longer, but still fail reasonably fast
-	client := &http.Client{Timeout: 1 * time.Second}
-	resp, err := client.Do(req)
-	if err != nil {
-		return "", fmt.Errorf("failed to call Playbooks API: %w", err)
-	}
-	defer func() {
-		_ = resp.Body.Close()
-	}()
-
-	// Handle specific error codes (AC3, AC4)
-	if resp.StatusCode == 403 {
-		return "", fmt.Errorf("permission denied (403)")
-	}
-	if resp.StatusCode == 404 {
-		return "", fmt.Errorf("playbook run not found (404)")
+	// Handle API errors gracefully (AC2, AC3, AC4, AC5, AC6)
+	if callErr != nil {
+		c.api.LogWarn("Failed to update message in playbook channel",
+			"channel_id", channelID,
+			"post_id", postID,
+			"error", callErr.Error(),
+			"circuit_state", c.circuitBreaker.GetState().String())
+		return nil // Don't propagate error (AC6)
 	}
 
-	// Check for non-200 status
-	if resp.StatusCode != 200 {
-		// Read response body for debugging context
-		body, _ := io.ReadAll(resp.Body)
-		bodyPreview := string(body)
-		if len(bodyPreview) > 200 {
-			bodyPreview = bodyPreview[:200] + "..."
-		}
-		return "", fmt.Errorf("playbooks API returned status %d for %s: %s", resp.StatusCode, url, bodyPreview)
+	return nil
+}
+
+// updateMessageInPlaybookChannelInternal updates an existing post
+// GitHub Issue #2: Using UpdatePost instead of Playbooks API
+func (c *Client) updateMessageInPlaybookChannelInternal(channelID string, postID string, message string) error {
+	// Get the existing post
+	existingPost, appErr := c.api.GetPost(postID)
+	if appErr != nil {
+		return fmt.Errorf("failed to get post: %w", appErr)
 	}
 
-	// Parse response to extract post ID
-	var result struct {
-		ID string `json:"id"`
-	}
-	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
-		return "", fmt.Errorf("failed to decode response: %w", err)
+	// Update the message content
+	existingPost.Message = message
+
+	// Update the post
+	_, appErr = c.api.UpdatePost(existingPost)
+	if appErr != nil {
+		return fmt.Errorf("failed to update post: %w", appErr)
 	}
 
-	return result.ID, nil
+	return nil
 }
 
 // GetMetrics returns a snapshot of current metrics

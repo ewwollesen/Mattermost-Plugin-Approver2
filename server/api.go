@@ -312,10 +312,11 @@ func (p *Plugin) handleApproveNew(payload *model.SubmitDialogRequest) *model.Sub
 	}
 
 	// Story 8.3: Post status to playbook channel if this is a playbook-linked approval
+	// GitHub Issue #2: Using CreatePost with markdown tables for nice formatting without Playbooks API side effects
 	if record.PlaybookRunID != "" && p.playbooksClient != nil {
 		message := formatPendingPlaybookStatusMessage(record, approver.Username)
 
-		postID, err := p.playbooksClient.PostPlaybookStatus(record.PlaybookRunID, message, payload.UserId)
+		postID, err := p.playbooksClient.PostMessageToPlaybookChannel(record.PlaybookChannelID, message)
 		if err != nil {
 			// Log warning but continue - playbook posting is best effort (AC7)
 			p.API.LogWarn("Failed to post status to playbook channel",
@@ -351,23 +352,32 @@ func (p *Plugin) handleApproveNew(payload *model.SubmitDialogRequest) *model.Sub
 		approver.Username, approver.GetDisplayName(model.ShowFullName),
 		record.Code)
 
-	post := &model.Post{
-		UserId:    "", // Empty for system/bot message
-		ChannelId: payload.ChannelId,
-		Message:   confirmMsg,
-	}
-
-	// Send ephemeral post (only requester sees it)
-	ephemeralPost := p.API.SendEphemeralPost(payload.UserId, post)
-	if ephemeralPost == nil {
-		p.API.LogError("Failed to send ephemeral confirmation post", "user_id", payload.UserId, "record_id", record.ID, "code", record.Code)
-		// AC3: Fallback to regular post as generic success indicator if ephemeral fails
-		// This ensures user sees confirmation even if ephemeral delivery fails
-		post.UserId = payload.UserId
-		if _, appErr := p.API.CreatePost(post); appErr != nil {
-			p.API.LogError("Failed to send fallback confirmation post", "user_id", payload.UserId, "record_id", record.ID, "code", record.Code, "error", appErr.Error())
-			// Don't fail the whole operation - record is already saved
+	// GitHub Issue #2: Skip ephemeral message in playbook channels (requester sees status post there)
+	if record.PlaybookRunID == "" {
+		post := &model.Post{
+			UserId:    "", // Empty for system/bot message
+			ChannelId: payload.ChannelId,
+			Message:   confirmMsg,
 		}
+
+		// Send ephemeral post (only requester sees it)
+		ephemeralPost := p.API.SendEphemeralPost(payload.UserId, post)
+		if ephemeralPost == nil {
+			p.API.LogError("Failed to send ephemeral confirmation post", "user_id", payload.UserId, "record_id", record.ID, "code", record.Code)
+			// AC3: Fallback to regular post as generic success indicator if ephemeral fails
+			// This ensures user sees confirmation even if ephemeral delivery fails
+			post.UserId = payload.UserId
+			if _, appErr := p.API.CreatePost(post); appErr != nil {
+				p.API.LogError("Failed to send fallback confirmation post", "user_id", payload.UserId, "record_id", record.ID, "code", record.Code, "error", appErr.Error())
+				// Don't fail the whole operation - record is already saved
+			}
+		}
+	} else {
+		p.API.LogDebug("Skipping ephemeral confirmation - approval posted to playbook channel",
+			"approval_code", record.Code,
+			"playbook_run_id", record.PlaybookRunID,
+			"playbook_channel_id", record.PlaybookChannelID,
+		)
 	}
 
 	p.API.LogInfo("Approval request created successfully",
@@ -631,6 +641,7 @@ func (p *Plugin) handleConfirmDecision(payload *model.SubmitDialogRequest) *mode
 	}
 
 	// Story 8.5: Post status update to playbook channel if playbook-linked (best effort, AC8)
+	// GitHub Issue #2: UPDATE existing post instead of creating new ones (like DM behavior)
 	if updatedRecord.PlaybookRunID != "" && p.playbooksClient != nil {
 		var statusMessage string
 		if updatedRecord.Status == approval.StatusApproved {
@@ -641,20 +652,39 @@ func (p *Plugin) handleConfirmDecision(payload *model.SubmitDialogRequest) *mode
 
 		// Validate message is not empty before posting
 		if statusMessage != "" {
-			_, err := p.playbooksClient.PostPlaybookStatus(
-				updatedRecord.PlaybookRunID,
-				statusMessage,
-				updatedRecord.RequesterID,
-			)
-			if err != nil {
-				// AC8: Log error but don't block decision processing (graceful degradation)
-				p.API.LogWarn("Failed to post approval status to playbook channel",
-					"approval_id", approvalID,
-					"playbook_run_id", updatedRecord.PlaybookRunID,
-					"status_type", "decision",
-					"decision", decision,
-					"error", err.Error(),
+			// Update existing post if we have the ID, otherwise create new one
+			if updatedRecord.PlaybookPostID != "" {
+				err := p.playbooksClient.UpdateMessageInPlaybookChannel(
+					updatedRecord.PlaybookChannelID,
+					updatedRecord.PlaybookPostID,
+					statusMessage,
 				)
+				if err != nil {
+					// AC8: Log error but don't block decision processing (graceful degradation)
+					p.API.LogWarn("Failed to update playbook status",
+						"approval_id", approvalID,
+						"playbook_run_id", updatedRecord.PlaybookRunID,
+						"playbook_post_id", updatedRecord.PlaybookPostID,
+						"status_type", "decision",
+						"decision", decision,
+						"error", err.Error(),
+					)
+				}
+			} else {
+				// Fallback: create new post if we don't have the original post ID
+				_, err := p.playbooksClient.PostMessageToPlaybookChannel(
+					updatedRecord.PlaybookChannelID,
+					statusMessage,
+				)
+				if err != nil {
+					p.API.LogWarn("Failed to post approval status to playbook channel",
+						"approval_id", approvalID,
+						"playbook_run_id", updatedRecord.PlaybookRunID,
+						"status_type", "decision",
+						"decision", decision,
+						"error", err.Error(),
+					)
+				}
 			}
 		}
 	}
@@ -897,24 +927,43 @@ func (p *Plugin) handleCancelModalSubmission(payload *model.SubmitDialogRequest)
 		}
 
 		// Story 8.5: Post cancellation status to playbook channel if playbook-linked (AC3, AC8)
+		// GitHub Issue #2: UPDATE existing post instead of creating new ones (like DM behavior)
 		if updatedRecord.PlaybookRunID != "" && p.playbooksClient != nil {
 			statusMessage := playbooks.FormatCanceledStatusMessage(updatedRecord)
 
 			// Validate message is not empty before posting
 			if statusMessage != "" {
-				_, err := p.playbooksClient.PostPlaybookStatus(
-					updatedRecord.PlaybookRunID,
-					statusMessage,
-					updatedRecord.RequesterID,
-				)
-				if err != nil {
-					// AC8: Log error but don't block cancellation processing
-					p.API.LogWarn("Failed to post approval status to playbook channel",
-						"approval_code", updatedRecord.Code,
-						"playbook_run_id", updatedRecord.PlaybookRunID,
-						"status_type", "cancellation",
-						"error", err.Error(),
+				// Update existing post if we have the ID, otherwise create new one
+				if updatedRecord.PlaybookPostID != "" {
+					err := p.playbooksClient.UpdateMessageInPlaybookChannel(
+						updatedRecord.PlaybookChannelID,
+						updatedRecord.PlaybookPostID,
+						statusMessage,
 					)
+					if err != nil {
+						// AC8: Log error but don't block cancellation processing
+						p.API.LogWarn("Failed to update playbook status",
+							"approval_code", updatedRecord.Code,
+							"playbook_run_id", updatedRecord.PlaybookRunID,
+							"playbook_post_id", updatedRecord.PlaybookPostID,
+							"status_type", "cancellation",
+							"error", err.Error(),
+						)
+					}
+				} else {
+					// Fallback: create new post if we don't have the original post ID
+					_, err := p.playbooksClient.PostMessageToPlaybookChannel(
+						updatedRecord.PlaybookChannelID,
+						statusMessage,
+					)
+					if err != nil {
+						p.API.LogWarn("Failed to post approval status to playbook channel",
+							"approval_code", updatedRecord.Code,
+							"playbook_run_id", updatedRecord.PlaybookRunID,
+							"status_type", "cancellation",
+							"error", err.Error(),
+						)
+					}
 				}
 			}
 		}
@@ -948,8 +997,7 @@ func (p *Plugin) mapCancellationReason(code string) string {
 }
 
 // formatPendingPlaybookStatusMessage formats the initial "pending" status message for playbook channels
-// Message format: "⏳ **Approval Pending:** [CODE] | [Details] | Waiting for @approver"
-// Details are truncated to 100 characters if longer (Story 8.3: AC2, AC5)
+// GitHub Issue #2: Using markdown table for nice formatting without Playbooks API side effects
 func formatPendingPlaybookStatusMessage(record *approval.ApprovalRecord, approverUsername string) string {
 	// Handle edge cases for required fields
 	code := record.Code
@@ -962,12 +1010,20 @@ func formatPendingPlaybookStatusMessage(record *approval.ApprovalRecord, approve
 		username = "approver"
 	}
 
+	// Truncate description using UTF-8-safe rune counting (same as formatters.go)
 	details := record.Description
-	if len(details) > 100 {
-		details = details[:97] + "..."
+	if len([]rune(details)) > 80 {
+		runes := []rune(details)
+		details = string(runes[:77]) + "..."
 	}
 
-	return fmt.Sprintf("⏳ **Approval Pending:** %s | %s | Waiting for @%s",
+	return fmt.Sprintf(`### ⏳ Approval Pending
+
+| Field | Value |
+|:------|:------|
+| **Request ID** | %s |
+| **Description** | %s |
+| **Awaiting** | @%s |`,
 		code,
 		details,
 		username)

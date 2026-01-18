@@ -14,7 +14,6 @@ import (
 	"github.com/mattermost/mattermost/server/public/plugin/plugintest"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
-	"github.com/stretchr/testify/require"
 )
 
 // MockPlaybooksClient is a mock implementation of playbooks.ClientInterface for testing
@@ -30,9 +29,14 @@ func (m *MockPlaybooksClient) GetPlaybookRunByChannel(channelID string, requeste
 	return nil, args.Error(1)
 }
 
-func (m *MockPlaybooksClient) PostPlaybookStatus(runID string, message string, requesterUserID string) (string, error) {
-	args := m.Called(runID, message, requesterUserID)
+func (m *MockPlaybooksClient) PostMessageToPlaybookChannel(channelID string, message string) (string, error) {
+	args := m.Called(channelID, message)
 	return args.String(0), args.Error(1)
+}
+
+func (m *MockPlaybooksClient) UpdateMessageInPlaybookChannel(channelID string, postID string, message string) error {
+	args := m.Called(channelID, postID, message)
+	return args.Error(0)
 }
 
 func (m *MockPlaybooksClient) GetMetrics() playbooks.Metrics {
@@ -1713,8 +1717,8 @@ func TestHandleApproveNew_PlaybookContext(t *testing.T) {
 			Name:      "Incident #47",
 			ChannelID: "channel123",
 		}, nil)
-		// Story 8.3: Mock playbook status posting
-		mockPlaybooksClient.On("PostPlaybookStatus", "playbook_run_456", mock.Anything, "req123").Return("post123", nil)
+		// Story 8.3 / GitHub Issue #2: Mock playbook channel posting (markdown tables without Playbooks API side effects)
+		mockPlaybooksClient.On("PostMessageToPlaybookChannel", "channel123", mock.Anything).Return("post123", nil)
 		plugin.playbooksClient = mockPlaybooksClient
 
 		// Mock users
@@ -1743,7 +1747,7 @@ func TestHandleApproveNew_PlaybookContext(t *testing.T) {
 			Name: "incident-47",
 		}, nil)
 		api.On("CreatePost", mock.Anything).Return(&model.Post{}, nil)
-		api.On("SendEphemeralPost", "req123", mock.Anything).Return(&model.Post{})
+		// GitHub Issue #2: Ephemeral post is NOT sent for playbook channels (requester sees status post)
 		api.On("LogInfo", mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything).Maybe()
 		api.On("LogDebug", mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything).Maybe()
 		api.On("LogWarn", mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything).Maybe()
@@ -1906,20 +1910,22 @@ func TestFormatPendingPlaybookStatusMessage(t *testing.T) {
 
 		message := formatPendingPlaybookStatusMessage(record, "jane.doe")
 
-		// Verify message contains all required components (AC2, AC4, AC5)
+		// Verify message contains all required components (AC2, AC4, AC5) - markdown table format
 		assert.Contains(t, message, "⏳", "Should contain emoji indicator")
-		assert.Contains(t, message, "**Approval Pending:**", "Should contain bold status")
+		assert.Contains(t, message, "Approval Pending", "Should contain status header")
 		assert.Contains(t, message, "A-X7K9Q2", "Should contain reference code")
 		assert.Contains(t, message, "Deploy v2.1.0 to production", "Should contain description")
 		assert.Contains(t, message, "@jane.doe", "Should contain approver mention")
 
-		// Verify exact format
-		expected := "⏳ **Approval Pending:** A-X7K9Q2 | Deploy v2.1.0 to production | Waiting for @jane.doe"
-		assert.Equal(t, expected, message)
+		// Verify markdown table structure
+		assert.Contains(t, message, "| Field | Value |")
+		assert.Contains(t, message, "| **Request ID** |")
+		assert.Contains(t, message, "| **Description** |")
+		assert.Contains(t, message, "| **Awaiting** |")
 	})
 
 	t.Run("truncates long descriptions", func(t *testing.T) {
-		longDescription := "This is a very long description that definitely exceeds one hundred characters and needs to be truncated appropriately"
+		longDescription := "This is a very long description that definitely exceeds eighty characters and needs to be truncated appropriately"
 		record := &approval.ApprovalRecord{
 			Code:        "A-TEST01",
 			Description: longDescription,
@@ -1927,22 +1933,16 @@ func TestFormatPendingPlaybookStatusMessage(t *testing.T) {
 
 		message := formatPendingPlaybookStatusMessage(record, "approver")
 
-		// Verify description is truncated to 100 chars (AC2)
+		// Verify description is truncated to 80 chars (AC2) - markdown table format
 		assert.Contains(t, message, "...", "Truncated message should end with ellipsis")
-
-		// Extract the details portion
-		// Format: "⏳ **Approval Pending:** CODE | DETAILS | Waiting for @user"
-		parts := strings.Split(message, " | ")
-		require.Len(t, parts, 3, "Message should have 3 parts")
-
-		detailsPart := parts[1]
-		assert.LessOrEqual(t, len(detailsPart), 100, "Details should be truncated to <=100 chars")
-		assert.True(t, strings.HasSuffix(detailsPart, "..."), "Details should end with ellipsis")
+		assert.NotContains(t, message, longDescription, "Full description should not appear")
+		// Verify table structure is intact
+		assert.Contains(t, message, "| **Description** |")
 	})
 
-	t.Run("handles exactly 100 character descriptions", func(t *testing.T) {
-		// Create description of exactly 100 characters
-		description := strings.Repeat("a", 100)
+	t.Run("handles exactly 80 character descriptions", func(t *testing.T) {
+		// Create description of exactly 80 characters
+		description := strings.Repeat("a", 80)
 		record := &approval.ApprovalRecord{
 			Code:        "A-TEST02",
 			Description: description,
@@ -1950,9 +1950,9 @@ func TestFormatPendingPlaybookStatusMessage(t *testing.T) {
 
 		message := formatPendingPlaybookStatusMessage(record, "user")
 
-		// Should not be truncated
+		// Should not be truncated at exactly 80 chars
 		assert.Contains(t, message, description)
-		assert.NotContains(t, message, "...", "Should not truncate at exactly 100 chars")
+		assert.NotContains(t, message, "...", "Should not truncate at exactly 80 chars")
 	})
 
 	t.Run("handles short descriptions", func(t *testing.T) {
@@ -2037,12 +2037,14 @@ func TestHandleApproveNew_PlaybookStatusPosting(t *testing.T) {
 			Name:      "Incident #47",
 			ChannelID: "channel123",
 		}, nil)
-		mockPlaybooksClient.On("PostPlaybookStatus", "playbook_run_456", mock.MatchedBy(func(msg string) bool {
-			// Verify message format (AC2)
+		mockPlaybooksClient.On("PostMessageToPlaybookChannel", "channel123", mock.MatchedBy(func(msg string) bool {
+			// Verify message format (AC2) - now using markdown table
 			return strings.Contains(msg, "⏳") &&
-				strings.Contains(msg, "**Approval Pending:**") &&
-				strings.Contains(msg, "@bob")
-		}), "req123").Return("post789", nil)
+				strings.Contains(msg, "Approval Pending") &&
+				strings.Contains(msg, "@bob") &&
+				strings.Contains(msg, "| Field | Value |") &&
+				strings.Contains(msg, "| **Request ID** |")
+		})).Return("post789", nil)
 		plugin.playbooksClient = mockPlaybooksClient
 
 		// Mock users
@@ -2071,7 +2073,7 @@ func TestHandleApproveNew_PlaybookStatusPosting(t *testing.T) {
 			Name: "incident-47",
 		}, nil)
 		api.On("CreatePost", mock.Anything).Return(&model.Post{}, nil)
-		api.On("SendEphemeralPost", "req123", mock.Anything).Return(&model.Post{})
+		// GitHub Issue #2: Ephemeral post is NOT sent for playbook channels (requester sees status post)
 		api.On("LogInfo", mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything).Maybe()
 		api.On("LogDebug", mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything).Maybe()
 
@@ -2113,7 +2115,7 @@ func TestHandleApproveNew_PlaybookStatusPosting(t *testing.T) {
 			Name:      "Incident #47",
 			ChannelID: "channel123",
 		}, nil)
-		mockPlaybooksClient.On("PostPlaybookStatus", "playbook_run_456", mock.Anything, "req123").Return("", fmt.Errorf("API error"))
+		mockPlaybooksClient.On("PostMessageToPlaybookChannel", "channel123", mock.Anything).Return("", fmt.Errorf("API error"))
 		plugin.playbooksClient = mockPlaybooksClient
 
 		// Mock users
@@ -2142,7 +2144,7 @@ func TestHandleApproveNew_PlaybookStatusPosting(t *testing.T) {
 			Name: "incident-47",
 		}, nil)
 		api.On("CreatePost", mock.Anything).Return(&model.Post{}, nil)
-		api.On("SendEphemeralPost", "req123", mock.Anything).Return(&model.Post{})
+		// GitHub Issue #2: Ephemeral post is NOT sent for playbook channels (requester sees status post)
 		api.On("LogInfo", mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything).Maybe()
 		api.On("LogDebug", mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything).Maybe()
 		api.On("LogWarn", mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything).Maybe()

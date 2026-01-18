@@ -9,41 +9,60 @@ import (
 )
 
 // FormatApprovedStatusMessage formats the playbook channel status message for approved requests
-// Story 8.5 AC1: "✅ **Approved:** [CODE] | [Details] | Approved by @approver at [time]"
+// GitHub Issue #2: Using markdown table for nice formatting without Playbooks API side effects
 func FormatApprovedStatusMessage(record *approval.ApprovalRecord) string {
-	details := truncateString(record.Description, 100)
+	details := truncateString(record.Description, 80)
 	timeStr := formatTimestamp(record.DecidedAt)
 
-	return fmt.Sprintf("✅ **Approved:** %s | %s | Approved by @%s at %s",
+	noteRow := ""
+	if record.DecisionComment != "" {
+		note := truncateString(record.DecisionComment, 80)
+		noteRow = fmt.Sprintf("\n| **Note** | %s |", note)
+	}
+
+	return fmt.Sprintf(`### ✅ Approval Approved
+
+| Field | Value |
+|:------|:------|
+| **Request ID** | %s |
+| **Description** | %s |
+| **Approved By** | @%s |
+| **Time** | %s |%s`,
 		record.Code,
 		details,
 		record.ApproverUsername,
-		timeStr)
+		timeStr,
+		noteRow)
 }
 
 // FormatDeniedStatusMessage formats the playbook channel status message for denied requests
-// Story 8.5 AC2: "❌ **Denied:** [CODE] | [Details] | Denied by @approver | Reason: [reason]"
+// GitHub Issue #2: Using markdown table for nice formatting without Playbooks API side effects
 func FormatDeniedStatusMessage(record *approval.ApprovalRecord) string {
-	details := truncateString(record.Description, 100)
+	details := truncateString(record.Description, 80)
 
-	message := fmt.Sprintf("❌ **Denied:** %s | %s | Denied by @%s",
-		record.Code,
-		details,
-		record.ApproverUsername)
-
-	// Add reason if provided (Story 8.5 AC2)
+	reasonRow := ""
 	if record.DecisionComment != "" {
-		reason := truncateString(record.DecisionComment, 100)
-		message += fmt.Sprintf(" | Reason: %s", reason)
+		reason := truncateString(record.DecisionComment, 80)
+		reasonRow = fmt.Sprintf("\n| **Reason** | %s |", reason)
 	}
 
-	return message
+	return fmt.Sprintf(`### ❌ Approval Denied
+
+| Field | Value |
+|:------|:------|
+| **Request ID** | %s |
+| **Description** | %s |
+| **Denied By** | @%s |%s`,
+		record.Code,
+		details,
+		record.ApproverUsername,
+		reasonRow)
 }
 
 // FormatCanceledStatusMessage formats the playbook channel status message for canceled requests
-// Story 8.5 AC3: "🚫 **Canceled:** [CODE] | [Details] | Reason: [cancellation reason]"
+// GitHub Issue #2: Using markdown table for nice formatting without Playbooks API side effects
 func FormatCanceledStatusMessage(record *approval.ApprovalRecord) string {
-	details := truncateString(record.Description, 100)
+	details := truncateString(record.Description, 80)
 	reason := record.CanceledReason
 	if reason == "" {
 		reason = "Not specified"
@@ -51,22 +70,34 @@ func FormatCanceledStatusMessage(record *approval.ApprovalRecord) string {
 
 	// Include additional details if present (Story 7.3 integration)
 	if record.CanceledDetails != "" {
-		detailsText := truncateString(record.CanceledDetails, 50)
+		detailsText := truncateString(record.CanceledDetails, 60)
 		reason = fmt.Sprintf("%s (%s)", reason, detailsText)
 	}
 
-	return fmt.Sprintf("🚫 **Canceled:** %s | %s | Reason: %s",
+	return fmt.Sprintf(`### 🚫 Approval Canceled
+
+| Field | Value |
+|:------|:------|
+| **Request ID** | %s |
+| **Description** | %s |
+| **Reason** | %s |`,
 		record.Code,
 		details,
 		reason)
 }
 
 // FormatTimedOutStatusMessage formats the playbook channel status message for timed-out requests
-// Story 8.5 AC4: "⏱️ **Timeout:** [CODE] | [Details] | No response from @approver"
+// GitHub Issue #2: Using markdown table for nice formatting without Playbooks API side effects
 func FormatTimedOutStatusMessage(record *approval.ApprovalRecord) string {
-	details := truncateString(record.Description, 100)
+	details := truncateString(record.Description, 80)
 
-	return fmt.Sprintf("⏱️ **Timeout:** %s | %s | No response from @%s",
+	return fmt.Sprintf(`### ⏱️ Approval Timed Out
+
+| Field | Value |
+|:------|:------|
+| **Request ID** | %s |
+| **Description** | %s |
+| **Approver** | @%s (no response) |`,
 		record.Code,
 		details,
 		record.ApproverUsername)

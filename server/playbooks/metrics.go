@@ -16,7 +16,7 @@ type Metrics struct {
 	DetectionFailed   int64
 	DetectionLatency  time.Duration
 
-	// Status post metrics (PostPlaybookStatus calls)
+	// Status post metrics (PostMessageToPlaybookChannel / UpdateMessageInPlaybookChannel calls)
 	StatusPostCalls   int64
 	StatusPostSuccess int64
 	StatusPostFailed  int64

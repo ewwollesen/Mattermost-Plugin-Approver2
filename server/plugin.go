@@ -70,7 +70,7 @@ func (p *Plugin) OnActivate() error {
 	if siteURL != nil && *siteURL != "" {
 		// Check if Playbooks plugin is active
 		if p.isPlaybooksPluginActive() {
-			p.playbooksClient = playbooks.NewClient(p.API, *siteURL)
+			p.playbooksClient = playbooks.NewClient(p.API, *siteURL, p.botUserID)
 			p.API.LogInfo("Playbooks integration initialized",
 				"circuit_breaker_threshold", 5,
 				"circuit_breaker_timeout", "5m")
