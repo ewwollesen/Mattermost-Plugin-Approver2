@@ -1,8 +1,7 @@
-# generated: 2026-01-17
+# generated: 2026-01-18
 # project: Mattermost-Plugin-Approver2
-# project_key: mattermost-plugin-approver2
 # tracking_system: file-system
-# story_location: _bmad-output/implementation-artifacts
+# story_location: {project-root}/_bmad-output/implementation-artifacts
 
 # STATUS DEFINITIONS:
 # ==================
@@ -33,81 +32,23 @@
 # - SM typically creates next story after previous one is 'done' to incorporate learnings
 # - Dev moves story to 'review', then runs code-review (fresh context, different LLM recommended)
 
-generated: 2026-01-17
+generated: 2026-01-18
 project: Mattermost-Plugin-Approver2
-project_key: mattermost-plugin-approver2
 tracking_system: file-system
 story_location: _bmad-output/implementation-artifacts
 
 development_status:
-  # Epic 1: Approval Request Creation & Management
-  epic-1: done
-  1-1-plugin-foundation-slash-command-registration: done
-  1-2-approval-request-data-model-kv-storage: done
-  1-3-create-approval-request-via-modal: done
-  1-4-generate-human-friendly-reference-codes: done
-  1-5-request-validation-error-handling: done
-  1-6-request-submission-immediate-confirmation: done
-  1-7-cancel-pending-approval-requests: done
-  epic-1-retrospective: done
-
-  # Epic 2: Approval Decision Processing
-  epic-2: done
-  2-1-send-dm-notification-to-approver: done
-  2-2-display-approval-request-with-interactive-buttons: done
-  2-3-handle-approve-deny-button-interactions: done
-  2-4-record-approval-decision-immutably: done
-  2-5-send-outcome-notification-to-requester: done
-  2-6-handle-notification-delivery-failures: done
-  epic-2-retrospective: optional
-
-  # Epic 3: Approval History & Retrieval
-  epic-3: done
-  3-1-list-users-approval-requests: done
-  3-2-retrieve-specific-approval-by-reference-code: done
-  3-3-display-approval-records-in-readable-format: done
-  3-4-implement-index-strategy-for-fast-retrieval: done  # Completed during Story 3.1 code review
-  3-5-enforce-access-control-on-retrieval: done
-  epic-3-retrospective: optional
-
-  # Epic 4: Improved Cancellation UX + Audit Trail
-  epic-4: done
-  4-1-update-approver-dm-post-on-cancellation: done
-  4-2-send-cancellation-notification-to-approver: done
-  4-3-add-cancellation-reason-dropdown: done
-  4-4-store-cancellation-reason-in-approval-record: done
-  4-5-display-cancellation-reason-in-approval-details: done
-  4-6-show-canceled-requests-in-list-sorted-to-bottom: done
-  4-7-fix-ghost-buttons-bug: done
-  epic-4-retrospective: optional
-
-  # Epic 5: List Filtering and Default View Optimization
-  epic-5: done
-  5-1-add-filter-parameter-to-list-command: done
-  5-2-change-default-behavior-add-count-display: done
-  epic-5-retrospective: optional
-
-  # Epic 6: Request Timeout & Verification (Feature Complete for 1.0)
-  epic-6: done
-  6-1-auto-timeout-for-pending-approval-requests: done
-  6-2-verification-step-for-approved-requests: done
-  epic-6-retrospective: optional
-
-  # Epic 7: 1.0 Polish & UX Improvements
-  epic-7: done
-  7-1-fix-cancellation-notification-to-requestor: done
-  7-2-fix-cicd-build-failures-on-tag-push: done
-  7-3-fix-additional-details-box-behavior-in-cancel-dialog: done
-  7-4-add-autocomplete-for-slash-command-arguments: done
-  7-5-convert-approve-list-output-to-markdown-table: done
-  epic-7-retrospective: optional
-
-  # Epic 8: Playbook Integration
-  epic-8: in-progress
-  8-1-playbook-context-detection: review
-  8-2-data-model-extension-playbook-metadata: done
-  8-3-post-status-messages-playbook-channel: done
-  8-4-add-playbook-context-approver-dms: done
-  8-5-update-playbook-channel-status-changes: done
-  8-6-error-handling-graceful-fallback: done
-  epic-8-retrospective: optional
+  # Epic 9: Webapp Component Framework & Timezone-Aware Posts (v3.0.0)
+  epic-9: in-progress
+  9-1-webapp-infrastructure-setup: done
+  9-2-plugin-manifest-webapp-registration: done
+  9-3-hello-world-component-verification: done
+  9-4-timestamp-component-with-timezone-support: done
+  9-5-approval-post-ui-components-library: done
+  9-6-approval-post-base-component: done
+  9-7-register-custom-post-type: done
+  9-8-server-side-post-type-updates-for-playbook-posts: done
+  9-9-end-to-end-testing-and-validation: done
+  9-10-convert-dm-notifications-to-custom-post-type: ready-for-dev
+  9-11-end-to-end-dm-notification-validation: ready-for-dev
+  epic-9-retrospective: optional

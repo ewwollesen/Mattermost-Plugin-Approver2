@@ -34,8 +34,8 @@ func (s CircuitState) String() string {
 
 // Logger interface for circuit breaker logging
 type Logger interface {
-	LogWarn(message string, keyValuePairs ...interface{})
-	LogInfo(message string, keyValuePairs ...interface{})
+	LogWarn(message string, keyValuePairs ...any)
+	LogInfo(message string, keyValuePairs ...any)
 }
 
 // CircuitBreaker implements the circuit breaker pattern to prevent repeated
@@ -89,7 +89,6 @@ func (cb *CircuitBreaker) Call(fn func() error) error {
 
 	// Attempt the call
 	err := fn()
-
 	if err != nil {
 		cb.failureCount++
 
@@ -119,7 +118,8 @@ func (cb *CircuitBreaker) Call(fn func() error) error {
 	}
 
 	// Success - reset circuit breaker
-	if cb.state == CircuitHalfOpen {
+	switch cb.state {
+	case CircuitHalfOpen:
 		// Log recovery when transitioning from half-open to closed
 		if cb.logger != nil {
 			cb.logger.LogInfo("Circuit breaker closed - service recovered",
@@ -127,7 +127,7 @@ func (cb *CircuitBreaker) Call(fn func() error) error {
 		}
 		cb.state = CircuitClosed
 		cb.failureCount = 0
-	} else if cb.state == CircuitClosed {
+	case CircuitClosed:
 		cb.failureCount = 0
 	}
 

@@ -337,7 +337,7 @@ func TestSendApprovalRequestDM_WithActionButtons(t *testing.T) {
 		actions := attachment["actions"].([]any)
 		approveButton := actions[0].(map[string]any)
 
-		// Verify approve button properties (no ID - using custom integration URL)
+		// Verify approve button properties
 		assert.Equal(t, "Approve", approveButton["name"])
 		assert.Equal(t, "primary", approveButton["style"])
 
@@ -383,7 +383,7 @@ func TestSendApprovalRequestDM_WithActionButtons(t *testing.T) {
 		actions := attachment["actions"].([]any)
 		denyButton := actions[1].(map[string]any)
 
-		// Verify deny button properties (no ID - using custom integration URL)
+		// Verify deny button properties
 		assert.Equal(t, "Deny", denyButton["name"])
 		assert.Equal(t, "danger", denyButton["style"])
 
@@ -395,6 +395,42 @@ func TestSendApprovalRequestDM_WithActionButtons(t *testing.T) {
 		context := integration["context"].(map[string]any)
 		assert.Equal(t, "record123", context["approval_id"])
 		assert.Equal(t, "deny", context["action"])
+	})
+
+	t.Run("buttons and message format for baseline DM", func(t *testing.T) {
+		api := &plugintest.API{}
+		botUserID := "bot123"
+		approverID := "approver456"
+		dmChannelID := "dm789"
+
+		var capturedPost *model.Post
+		api.On("GetDirectChannel", botUserID, approverID).Return(&model.Channel{Id: dmChannelID}, nil)
+		api.On("CreatePost", mock.MatchedBy(func(post *model.Post) bool {
+			capturedPost = post
+			return true
+		})).Return(&model.Post{Id: "post_123"}, nil)
+
+		record := &approval.ApprovalRecord{
+			ID:                   "record123",
+			Code:                 "A-X7K9Q2",
+			ApproverID:           approverID,
+			RequesterUsername:    "alice",
+			RequesterDisplayName: "Alice Carter",
+			Description:          "Deploy hotfix",
+			CreatedAt:            1704988800000, // 2024-01-11 12:00:00 UTC
+		}
+
+		_, err := SendApprovalRequestDM(api, botUserID, record)
+		assert.NoError(t, err)
+
+		// Verify standard post format with buttons
+		attachments := capturedPost.Props["attachments"].([]any)
+		attachment := attachments[0].(map[string]any)
+		actions := attachment["actions"].([]any)
+		assert.Len(t, actions, 2, "should have 2 buttons")
+
+		// Verify message includes timestamp (in UTC format for now)
+		assert.Contains(t, capturedPost.Message, "A-X7K9Q2", "message should include request code")
 	})
 
 	t.Run("message format remains intact with buttons", func(t *testing.T) {
@@ -471,10 +507,10 @@ func TestSendApprovalRequestDM_WithActionButtons(t *testing.T) {
 
 		attachment := attachments[0].(map[string]any)
 		actions := attachment["actions"].([]any)
-		assert.Len(t, actions, 2)
+		assert.Len(t, actions, 2, "should have 2 buttons with long description")
 
 		// Verify full description preserved in message
-		assert.Contains(t, capturedPost.Message, longDescription)
+		assert.Contains(t, capturedPost.Message, longDescription, "full description should be in message")
 	})
 
 	t.Run("approval context is unique per approval", func(t *testing.T) {

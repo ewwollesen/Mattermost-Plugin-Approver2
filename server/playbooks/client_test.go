@@ -8,6 +8,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/mattermost/mattermost-plugin-approver2/server/approval"
 	"github.com/mattermost/mattermost/server/public/model"
 	"github.com/mattermost/mattermost/server/public/plugin/plugintest"
 	"github.com/stretchr/testify/assert"
@@ -259,20 +260,34 @@ func TestGetUserToken_CreateTokenError(t *testing.T) {
 }
 
 // Story 8.3 / GitHub Issue #2: Tests for PostMessageToPlaybookChannel (using CreatePost with markdown tables)
+// Story 9.8: Updated to test custom post type with approval record
 func TestPostMessageToPlaybookChannel_Success(t *testing.T) {
 	api := &plugintest.API{}
 	expectedPostID := "post123"
 
-	// Mock CreatePost
+	testRecord := &approval.ApprovalRecord{
+		Code:                 "A-TEST",
+		Status:               approval.StatusPending,
+		RequesterUsername:    "requester",
+		RequesterDisplayName: "Requester User",
+		ApproverUsername:     "approver",
+		ApproverDisplayName:  "Approver User",
+		Description:          "Test approval request",
+		CreatedAt:            time.Now().UnixMilli(),
+	}
+
+	// Mock CreatePost - Story 9.8: Verify custom post type and props
 	api.On("CreatePost", mock.MatchedBy(func(post *model.Post) bool {
 		return post.UserId == "bot123" &&
 			post.ChannelId == "channel123" &&
-			strings.Contains(post.Message, "Approval Pending")
+			post.Type == "custom_approval" &&
+			post.Props != nil &&
+			strings.Contains(post.Message, "Approval Requested")
 	})).Return(&model.Post{Id: expectedPostID}, nil)
 
 	client := NewClient(api, "http://localhost", "bot123")
 
-	postID, err := client.PostMessageToPlaybookChannel("channel123", "### ⏳ Approval Pending\n\n| Field | Value |\n|:------|:------|\n| **Request ID** | A-TEST |")
+	postID, err := client.PostMessageToPlaybookChannel("channel123", testRecord)
 
 	require.NoError(t, err)
 	assert.Equal(t, expectedPostID, postID)
@@ -281,6 +296,17 @@ func TestPostMessageToPlaybookChannel_Success(t *testing.T) {
 
 func TestPostMessageToPlaybookChannel_APIError(t *testing.T) {
 	api := &plugintest.API{}
+
+	testRecord := &approval.ApprovalRecord{
+		Code:                 "A-TEST",
+		Status:               approval.StatusPending,
+		RequesterUsername:    "requester",
+		RequesterDisplayName: "Requester User",
+		ApproverUsername:     "approver",
+		ApproverDisplayName:  "Approver User",
+		Description:          "Test approval request",
+		CreatedAt:            time.Now().UnixMilli(),
+	}
 
 	// Mock CreatePost to fail
 	api.On("CreatePost", mock.Anything).Return(nil, &model.AppError{Message: "API error"})
@@ -292,7 +318,7 @@ func TestPostMessageToPlaybookChannel_APIError(t *testing.T) {
 
 	client := NewClient(api, "http://localhost", "bot123")
 
-	postID, err := client.PostMessageToPlaybookChannel("channel123", "Test message")
+	postID, err := client.PostMessageToPlaybookChannel("channel123", testRecord)
 
 	// Story 8.6 AC6: No user-visible errors - errors are logged but not returned
 	assert.NoError(t, err)
@@ -326,7 +352,7 @@ func TestCircuitBreakerMetricsIntegration(t *testing.T) {
 	client := NewClient(api, server.URL, "bot123")
 
 	// Make 5 calls to trigger circuit breaker (threshold = 5)
-	for i := 0; i < 5; i++ {
+	for range 5 {
 		_, _ = client.GetPlaybookRunByChannel("channel123", "user123")
 	}
 

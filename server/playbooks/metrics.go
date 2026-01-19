@@ -11,10 +11,10 @@ type Metrics struct {
 	mu sync.RWMutex
 
 	// Detection metrics (GetPlaybookRunByChannel calls)
-	DetectionCalls    int64
-	DetectionSuccess  int64
-	DetectionFailed   int64
-	DetectionLatency  time.Duration
+	DetectionCalls   int64
+	DetectionSuccess int64
+	DetectionFailed  int64
+	DetectionLatency time.Duration
 
 	// Status post metrics (PostMessageToPlaybookChannel / UpdateMessageInPlaybookChannel calls)
 	StatusPostCalls   int64
@@ -93,10 +93,24 @@ func (m *Metrics) UpdateCircuitBreakerState(state CircuitState) {
 }
 
 // GetSnapshot returns a copy of current metrics (thread-safe)
+// Note: Creates a new Metrics struct without copying the mutex
 func (m *Metrics) GetSnapshot() Metrics {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
-	return *m
+
+	// Copy fields explicitly to avoid copying the mutex
+	return Metrics{
+		DetectionCalls:      m.DetectionCalls,
+		DetectionSuccess:    m.DetectionSuccess,
+		DetectionFailed:     m.DetectionFailed,
+		DetectionLatency:    m.DetectionLatency,
+		StatusPostCalls:     m.StatusPostCalls,
+		StatusPostSuccess:   m.StatusPostSuccess,
+		StatusPostFailed:    m.StatusPostFailed,
+		StatusPostLatency:   m.StatusPostLatency,
+		CircuitBreakerState: m.CircuitBreakerState,
+		CircuitBreakerOpens: m.CircuitBreakerOpens,
+	}
 }
 
 // GetDetectionSuccessRate returns the detection success rate as percentage (0-100)

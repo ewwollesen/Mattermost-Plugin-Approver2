@@ -271,19 +271,20 @@ func (m *MockPlaybooksClient) GetPlaybookRunByChannel(channelID string, requeste
 	return args.Get(0).(*playbooks.PlaybookRun), args.Error(1)
 }
 
-func (m *MockPlaybooksClient) PostMessageToPlaybookChannel(channelID string, message string) (string, error) {
-	args := m.Called(channelID, message)
+func (m *MockPlaybooksClient) PostMessageToPlaybookChannel(channelID string, record *approval.ApprovalRecord) (string, error) {
+	args := m.Called(channelID, record)
 	return args.String(0), args.Error(1)
 }
 
-func (m *MockPlaybooksClient) UpdateMessageInPlaybookChannel(channelID string, postID string, message string) error {
-	args := m.Called(channelID, postID, message)
+func (m *MockPlaybooksClient) UpdateMessageInPlaybookChannel(channelID string, postID string, record *approval.ApprovalRecord) error {
+	args := m.Called(channelID, postID, record)
 	return args.Error(0)
 }
 
 func (m *MockPlaybooksClient) GetMetrics() playbooks.Metrics {
-	args := m.Called()
-	return args.Get(0).(playbooks.Metrics)
+	m.Called() // Record the call for mock verification
+	// Return empty metrics to avoid mutex copy (mocks don't need real metrics)
+	return playbooks.Metrics{}
 }
 
 // Story 8.5: Integration test for timeout flow posting to playbook channel
@@ -353,14 +354,14 @@ func TestCheckTimeouts_PostsToPlaybookChannel(t *testing.T) {
 	mockAPI.On("UpdatePost", mock.Anything).Return(&model.Post{}, nil)
 
 	// Story 8.5 / GitHub Issue #2: Mock PostMessageToPlaybookChannel - verify it posts timeout message
+	// Story 9.8: Updated to match ApprovalRecord instead of message string
 	// Since timedOutRecord doesn't have PlaybookPostID set, it will fallback to POST
 	mockPlaybooksClient.On("PostMessageToPlaybookChannel",
 		"channel999",
-		mock.MatchedBy(func(msg string) bool {
-			return strings.Contains(msg, "⏱️") &&
-				strings.Contains(msg, "Timed Out") &&
-				strings.Contains(msg, "T-TEST01") &&
-				strings.Contains(msg, "@approver")
+		mock.MatchedBy(func(record *approval.ApprovalRecord) bool {
+			return record != nil &&
+				record.Code == "T-TEST01" &&
+				record.ApproverUsername == "approver"
 		}),
 	).Return("playbook_post_123", nil)
 

@@ -53,11 +53,13 @@ func SendApprovalRequestDM(api plugin.API, botUserID string, record *approval.Ap
 		message += playbookContext
 	}
 
-	// Create post with interactive action buttons
+	// Standard post with interactive buttons (baseline - working)
+	// Note: Timestamps will show in UTC (not user timezone) for DM notifications
+	// Future: Story needed to implement timezone support for DM buttons
 	post := &model.Post{
 		UserId:    botUserID,
 		ChannelId: channelID,
-		Message:   message,
+		Message:   message, // Markdown message
 		Props: model.StringInterface{
 			"attachments": []any{
 				map[string]any{
@@ -167,7 +169,7 @@ func SendOutcomeNotificationDM(api plugin.API, botUserID string, record *approva
 	// Add status statement
 	message += fmt.Sprintf("\n\n%s", status)
 
-	// Create post (no interactive buttons for outcome notification)
+	// Create standard post
 	post := &model.Post{
 		UserId:    botUserID,
 		ChannelId: channelID,
@@ -224,7 +226,9 @@ func UpdateApprovalPostForCancellation(api plugin.API, record *approval.Approval
 		canceledAtStr,
 	)
 
-	// Remove action buttons (props) - this fixes the ghost buttons bug
+	// Story 9.10: Clear interactive buttons from approval request post
+	// Note: Approval request DMs are standard posts (not custom_approval) to preserve button functionality
+	// Simply clear props to remove the buttons
 	post.Message = updatedMessage
 	post.Props = model.StringInterface{} // Clear all interactive elements
 
@@ -297,7 +301,7 @@ func SendCancellationNotificationDM(api plugin.API, botUserID string, record *ap
 		canceledAtStr,
 	)
 
-	// Create post (no interactive buttons for cancellation notification)
+	// Create standard post
 	post := &model.Post{
 		UserId:    botUserID,
 		ChannelId: channelID,
@@ -354,7 +358,7 @@ func SendTimeoutNotificationDM(api plugin.API, botUserID string, record *approva
 		record.ApproverUsername,
 		record.ApproverDisplayName)
 
-	// Create post (no interactive buttons for timeout notification)
+	// Create standard post
 	post := &model.Post{
 		UserId:    botUserID,
 		ChannelId: channelID,
@@ -431,7 +435,7 @@ The approver has canceled this approval request. You may submit a new request if
 		cancelTime,
 	)
 
-	// Create DM post
+	// Create standard post
 	post := &model.Post{
 		ChannelId: channelID,
 		UserId:    botUserID,
@@ -497,7 +501,7 @@ func SendVerificationNotificationDM(api plugin.API, botUserID string, record *ap
 		message += fmt.Sprintf("\n\n**Verification Note:**\n> %s", record.VerificationComment)
 	}
 
-	// Create post (no interactive buttons for verification notification)
+	// Create standard post
 	post := &model.Post{
 		UserId:    botUserID,
 		ChannelId: channelID,
@@ -512,6 +516,59 @@ func SendVerificationNotificationDM(api plugin.API, botUserID string, record *ap
 
 	return createdPost.Id, nil
 }
+
+// // FormatApprovalPropsForDM formats approval record data for DM notification custom post type
+// // Returns map suitable for post.Props that matches webapp ApprovalPost component expectations
+// // Story 9.10: DM notification conversion to custom post type
+// //
+// // Field names use snake_case to match webapp expectations (Story 9.7 AC3):
+// //   - approval_code, approval_status, requester_username, etc.
+// //
+// // Timestamps are int64 Unix milliseconds (NOT formatted strings)
+// // All fields are required except: decided_at, decision_comment (optional for pending status)
+// // DM-specific fields: notification_type, is_dm
+// func FormatApprovalPropsForDM(record *approval.ApprovalRecord, notificationType string) map[string]any {
+// 	if record == nil {
+// 		return make(map[string]any)
+// 	}
+//
+// 	props := map[string]any{
+// 		// Standard approval fields (same as playbook posts)
+// 		"approval_code":          record.Code,
+// 		"approval_status":        record.Status,
+// 		"requester_username":     record.RequesterUsername,
+// 		"requester_display_name": record.RequesterDisplayName,
+// 		"approver_username":      record.ApproverUsername,
+// 		"approver_display_name":  record.ApproverDisplayName,
+// 		"description":            record.Description,
+// 		"created_at":             record.CreatedAt, // int64 Unix millis
+//
+// 		// DM-specific fields
+// 		"notification_type": notificationType,
+// 		"is_dm":             true,
+// 	}
+//
+// 	// Optional fields - only include if they have meaningful values
+// 	if record.DecidedAt > 0 {
+// 		props["decided_at"] = record.DecidedAt // int64 Unix millis
+// 	}
+// 	if record.DecisionComment != "" {
+// 		props["decision_comment"] = record.DecisionComment
+// 	}
+//
+// 	// Playbook context (if available) - use same field names as playbooks/formatters.go
+// 	if record.PlaybookRunID != "" {
+// 		props["playbook_id"] = record.PlaybookRunID
+// 	}
+// 	if record.PlaybookName != "" {
+// 		props["playbook_title"] = record.PlaybookName
+// 	}
+// 	if record.PlaybookChannelID != "" {
+// 		props["playbook_channel_id"] = record.PlaybookChannelID
+// 	}
+//
+// 	return props
+// }
 
 // formatPlaybookContext formats the playbook context section for DM notifications
 // Returns formatted string with playbook name and channel link (Story 8.4: AC2, AC3, AC8)

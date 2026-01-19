@@ -128,11 +128,15 @@ func (r *Router) executeNew(args *model.CommandArgs) (*model.CommandResponse, er
 	if r.playbooksClient != nil {
 		run, err := r.playbooksClient.GetPlaybookRunByChannel(args.ChannelId, args.UserId)
 		if err != nil {
-			// Log error but continue with approval creation (graceful degradation)
-			r.api.LogWarn("Failed to check for playbook context",
-				"channel_id", args.ChannelId,
-				"user_id", args.UserId,
-				"error", err.Error())
+			// Only log if it's NOT a "not found" error (reduces log noise for non-playbook channels)
+			// Note: Playbooks plugin itself will log "not found" at WARN level, which is expected
+			errorMsg := err.Error()
+			if !strings.Contains(errorMsg, "not found") && !strings.Contains(errorMsg, "404") {
+				r.api.LogWarn("Failed to check for playbook context",
+					"channel_id", args.ChannelId,
+					"user_id", args.UserId,
+					"error", errorMsg)
+			}
 		} else if run != nil {
 			r.api.LogDebug("Detected playbook context",
 				"run_id", run.ID,

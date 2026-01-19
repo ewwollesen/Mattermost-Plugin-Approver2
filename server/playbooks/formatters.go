@@ -8,6 +8,25 @@ import (
 	"github.com/mattermost/mattermost-plugin-approver2/server/approval"
 )
 
+// FormatPendingStatusMessage formats the playbook channel status message for pending requests
+// GitHub Issue #2: Using markdown table for nice formatting without Playbooks API side effects
+func FormatPendingStatusMessage(record *approval.ApprovalRecord) string {
+	details := truncateString(record.Description, 80)
+
+	return fmt.Sprintf(`### ⏳ Approval Requested
+
+| Field | Value |
+|:------|:------|
+| **Request ID** | %s |
+| **Description** | %s |
+| **Requested By** | @%s |
+| **Awaiting** | @%s |`,
+		record.Code,
+		details,
+		record.RequesterUsername,
+		record.ApproverUsername)
+}
+
 // FormatApprovedStatusMessage formats the playbook channel status message for approved requests
 // GitHub Issue #2: Using markdown table for nice formatting without Playbooks API side effects
 func FormatApprovedStatusMessage(record *approval.ApprovalRecord) string {
@@ -120,4 +139,35 @@ func truncateString(s string, maxLen int) string {
 	}
 	runes := []rune(s)
 	return string(runes[:maxLen-3]) + "..."
+}
+
+// FormatApprovalPropsForWebapp formats approval record data for webapp custom post type
+// Returns map suitable for post.Props that matches webapp ApprovalPost component expectations
+// Story 9.8: Server-side support for custom approval posts
+//
+// Field names use snake_case to match webapp expectations (Story 9.7 AC3):
+//   - approval_code, approval_status, requester_username, etc.
+//
+// Timestamps are int64 Unix milliseconds (NOT formatted strings)
+// All fields are required except: decided_at, decision_comment, note (optional for pending status)
+func FormatApprovalPropsForWebapp(record *approval.ApprovalRecord) map[string]any {
+	if record == nil {
+		return make(map[string]any)
+	}
+
+	props := map[string]any{
+		"approval_code":          record.Code,
+		"approval_status":        record.Status,
+		"requester_username":     record.RequesterUsername,
+		"requester_display_name": record.RequesterDisplayName,
+		"approver_username":      record.ApproverUsername,
+		"approver_display_name":  record.ApproverDisplayName,
+		"description":            record.Description,
+		"created_at":             record.CreatedAt, // int64 Unix millis
+		"decided_at":             record.DecidedAt, // int64 Unix millis (0 if pending)
+		"decision_comment":       record.DecisionComment,
+		"note":                   record.DecisionComment, // For approved posts
+	}
+
+	return props
 }

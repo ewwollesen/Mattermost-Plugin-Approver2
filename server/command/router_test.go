@@ -2496,19 +2496,20 @@ func (m *mockPlaybooksClient) GetPlaybookRunByChannel(channelID string, requeste
 	return args.Get(0).(*playbooks.PlaybookRun), args.Error(1)
 }
 
-func (m *mockPlaybooksClient) PostMessageToPlaybookChannel(channelID string, message string) (string, error) {
-	args := m.Called(channelID, message)
+func (m *mockPlaybooksClient) PostMessageToPlaybookChannel(channelID string, record *approval.ApprovalRecord) (string, error) {
+	args := m.Called(channelID, record)
 	return args.String(0), args.Error(1)
 }
 
-func (m *mockPlaybooksClient) UpdateMessageInPlaybookChannel(channelID string, postID string, message string) error {
-	args := m.Called(channelID, postID, message)
+func (m *mockPlaybooksClient) UpdateMessageInPlaybookChannel(channelID string, postID string, record *approval.ApprovalRecord) error {
+	args := m.Called(channelID, postID, record)
 	return args.Error(0)
 }
 
 func (m *mockPlaybooksClient) GetMetrics() playbooks.Metrics {
-	args := m.Called()
-	return args.Get(0).(playbooks.Metrics)
+	m.Called() // Record the call for mock verification
+	// Return empty metrics to avoid mutex copy (mocks don't need real metrics)
+	return playbooks.Metrics{}
 }
 
 func TestExecuteNew_PlaybookIntegration(t *testing.T) {

@@ -66,6 +66,7 @@ const (
 	StatusApproved = "approved"
 	StatusDenied   = "denied"
 	StatusCanceled = "canceled"
+	StatusTimeout  = "timeout" // Story 9.8: Timeout status for expired approvals
 )
 
 // Schema version constant

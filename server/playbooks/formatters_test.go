@@ -351,3 +351,214 @@ func TestTruncateString(t *testing.T) {
 		assert.NotContains(t, result, "...")
 	})
 }
+
+// Story 9.8: Unit tests for webapp custom post type props formatter
+
+func TestFormatApprovalPropsForWebapp(t *testing.T) {
+	t.Run("formats props for pending approval", func(t *testing.T) {
+		createdAt := time.Date(2024, 1, 17, 14, 23, 0, 0, time.UTC).UnixMilli()
+		record := &approval.ApprovalRecord{
+			Code:                 "A-X7K9Q2",
+			Status:               approval.StatusPending,
+			RequesterUsername:    "john.doe",
+			RequesterDisplayName: "John Doe",
+			ApproverUsername:     "jane.smith",
+			ApproverDisplayName:  "Jane Smith",
+			Description:          "Deploy v2.1.0 to production",
+			CreatedAt:            createdAt,
+			DecidedAt:            0, // Pending, no decision yet
+			DecisionComment:      "",
+		}
+
+		props := FormatApprovalPropsForWebapp(record)
+
+		// AC3: Verify all required fields with correct types
+		assert.Equal(t, "A-X7K9Q2", props["approval_code"])
+		assert.Equal(t, approval.StatusPending, props["approval_status"])
+		assert.Equal(t, "john.doe", props["requester_username"])
+		assert.Equal(t, "John Doe", props["requester_display_name"])
+		assert.Equal(t, "jane.smith", props["approver_username"])
+		assert.Equal(t, "Jane Smith", props["approver_display_name"])
+		assert.Equal(t, "Deploy v2.1.0 to production", props["description"])
+
+		// Verify timestamp types (int64, not strings)
+		assert.IsType(t, int64(0), props["created_at"])
+		assert.Equal(t, createdAt, props["created_at"])
+		assert.IsType(t, int64(0), props["decided_at"])
+		assert.Equal(t, int64(0), props["decided_at"])
+
+		// Optional fields
+		assert.Equal(t, "", props["decision_comment"])
+		assert.Equal(t, "", props["note"])
+	})
+
+	t.Run("formats props for approved approval with note", func(t *testing.T) {
+		createdAt := time.Date(2024, 1, 17, 14, 23, 0, 0, time.UTC).UnixMilli()
+		decidedAt := time.Date(2024, 1, 17, 15, 10, 0, 0, time.UTC).UnixMilli()
+		record := &approval.ApprovalRecord{
+			Code:                 "B-3M8PN",
+			Status:               approval.StatusApproved,
+			RequesterUsername:    "developer",
+			RequesterDisplayName: "Developer User",
+			ApproverUsername:     "tech.lead",
+			ApproverDisplayName:  "Tech Lead",
+			Description:          "Emergency hotfix deployment",
+			CreatedAt:            createdAt,
+			DecidedAt:            decidedAt,
+			DecisionComment:      "Looks good, proceed with deployment",
+		}
+
+		props := FormatApprovalPropsForWebapp(record)
+
+		assert.Equal(t, approval.StatusApproved, props["approval_status"])
+		assert.Equal(t, decidedAt, props["decided_at"])
+		assert.Equal(t, "Looks good, proceed with deployment", props["decision_comment"])
+		assert.Equal(t, "Looks good, proceed with deployment", props["note"]) // Note mirrors decision_comment
+	})
+
+	t.Run("formats props for denied approval with reason", func(t *testing.T) {
+		createdAt := time.Date(2024, 1, 17, 14, 23, 0, 0, time.UTC).UnixMilli()
+		decidedAt := time.Date(2024, 1, 17, 14, 30, 0, 0, time.UTC).UnixMilli()
+		record := &approval.ApprovalRecord{
+			Code:                 "C-4R7QT",
+			Status:               approval.StatusDenied,
+			RequesterUsername:    "contractor",
+			RequesterDisplayName: "Contractor User",
+			ApproverUsername:     "security.lead",
+			ApproverDisplayName:  "Security Lead",
+			Description:          "Access to production database",
+			CreatedAt:            createdAt,
+			DecidedAt:            decidedAt,
+			DecisionComment:      "Insufficient justification for P3 incident",
+		}
+
+		props := FormatApprovalPropsForWebapp(record)
+
+		assert.Equal(t, approval.StatusDenied, props["approval_status"])
+		assert.Equal(t, decidedAt, props["decided_at"])
+		assert.Equal(t, "Insufficient justification for P3 incident", props["decision_comment"])
+	})
+
+	t.Run("formats props for canceled approval", func(t *testing.T) {
+		record := &approval.ApprovalRecord{
+			Code:                 "D-9XP2Q",
+			Status:               approval.StatusCanceled,
+			RequesterUsername:    "requester",
+			RequesterDisplayName: "Requester",
+			ApproverUsername:     "approver",
+			ApproverDisplayName:  "Approver",
+			Description:          "Duplicate request",
+			CreatedAt:            time.Now().UnixMilli(),
+			DecidedAt:            0,
+			DecisionComment:      "", // Canceled might not have decision comment
+		}
+
+		props := FormatApprovalPropsForWebapp(record)
+
+		assert.Equal(t, approval.StatusCanceled, props["approval_status"])
+		assert.Equal(t, "", props["decision_comment"])
+	})
+
+	t.Run("formats props for timeout status", func(t *testing.T) {
+		createdAt := time.Date(2024, 1, 17, 14, 23, 0, 0, time.UTC).UnixMilli()
+		timeoutAt := time.Date(2024, 1, 17, 16, 23, 0, 0, time.UTC).UnixMilli() // 2 hours later
+		record := &approval.ApprovalRecord{
+			Code:                 "E-TEST",
+			Status:               "timeout", // Story 9.7 mentions timeout status
+			RequesterUsername:    "requester",
+			RequesterDisplayName: "Requester",
+			ApproverUsername:     "approver",
+			ApproverDisplayName:  "Approver",
+			Description:          "Timed out request",
+			CreatedAt:            createdAt,
+			DecidedAt:            timeoutAt,
+			DecisionComment:      "",
+		}
+
+		props := FormatApprovalPropsForWebapp(record)
+
+		assert.Equal(t, "timeout", props["approval_status"])
+		assert.Equal(t, timeoutAt, props["decided_at"])
+	})
+
+	t.Run("handles nil record gracefully", func(t *testing.T) {
+		props := FormatApprovalPropsForWebapp(nil)
+
+		// Should return empty map, not crash
+		assert.NotNil(t, props)
+		assert.Empty(t, props)
+	})
+
+	t.Run("handles empty strings in optional fields", func(t *testing.T) {
+		record := &approval.ApprovalRecord{
+			Code:                 "F-TEST",
+			Status:               approval.StatusPending,
+			RequesterUsername:    "",
+			RequesterDisplayName: "",
+			ApproverUsername:     "",
+			ApproverDisplayName:  "",
+			Description:          "",
+			CreatedAt:            time.Now().UnixMilli(),
+			DecidedAt:            0,
+			DecisionComment:      "",
+		}
+
+		props := FormatApprovalPropsForWebapp(record)
+
+		// Should not crash with empty strings
+		assert.Equal(t, "", props["requester_username"])
+		assert.Equal(t, "", props["description"])
+		assert.NotNil(t, props)
+	})
+
+	t.Run("preserves timestamp precision (int64)", func(t *testing.T) {
+		// Use precise timestamp with milliseconds
+		preciseTimestamp := int64(1705502580123) // Jan 17, 2024 14:23:00.123
+		record := &approval.ApprovalRecord{
+			Code:                 "G-TEST",
+			Status:               approval.StatusPending,
+			RequesterUsername:    "user",
+			RequesterDisplayName: "User",
+			ApproverUsername:     "approver",
+			ApproverDisplayName:  "Approver",
+			Description:          "Test",
+			CreatedAt:            preciseTimestamp,
+			DecidedAt:            0,
+		}
+
+		props := FormatApprovalPropsForWebapp(record)
+
+		// Verify exact timestamp (no precision loss)
+		assert.Equal(t, preciseTimestamp, props["created_at"])
+		assert.IsType(t, int64(0), props["created_at"])
+	})
+
+	t.Run("uses snake_case field names for webapp", func(t *testing.T) {
+		record := &approval.ApprovalRecord{
+			Code:                 "H-TEST",
+			Status:               approval.StatusPending,
+			RequesterUsername:    "user",
+			RequesterDisplayName: "User Display",
+			ApproverUsername:     "approver",
+			ApproverDisplayName:  "Approver Display",
+			Description:          "Test",
+			CreatedAt:            time.Now().UnixMilli(),
+		}
+
+		props := FormatApprovalPropsForWebapp(record)
+
+		// Verify snake_case naming (not camelCase)
+		_, hasSnakeCase := props["approval_code"]
+		assert.True(t, hasSnakeCase, "Should use snake_case 'approval_code'")
+
+		_, hasRequesterUsername := props["requester_username"]
+		assert.True(t, hasRequesterUsername, "Should use snake_case 'requester_username'")
+
+		_, hasDisplayName := props["requester_display_name"]
+		assert.True(t, hasDisplayName, "Should use snake_case 'requester_display_name'")
+
+		// Verify NOT camelCase
+		_, hasCamelCase := props["approvalCode"]
+		assert.False(t, hasCamelCase, "Should NOT use camelCase 'approvalCode'")
+	})
+}

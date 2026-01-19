@@ -45,7 +45,7 @@ func TestCircuitBreaker_OpensAfterThresholdReached(t *testing.T) {
 	cb := NewCircuitBreaker(3, 5*time.Minute)
 
 	// Simulate 3 failures
-	for i := 0; i < 3; i++ {
+	for i := range 3 {
 		err := cb.Call(func() error {
 			return fmt.Errorf("test error %d", i)
 		})
@@ -61,8 +61,8 @@ func TestCircuitBreaker_BlocksCallsWhenOpen(t *testing.T) {
 	cb := NewCircuitBreaker(2, 5*time.Minute)
 
 	// Open the circuit with failures
-	for i := 0; i < 2; i++ {
-		cb.Call(func() error {
+	for range 2 {
+		_ = cb.Call(func() error {
 			return fmt.Errorf("test error")
 		})
 	}
@@ -85,8 +85,8 @@ func TestCircuitBreaker_TransitionsToHalfOpenAfterTimeout(t *testing.T) {
 	cb := NewCircuitBreaker(2, 50*time.Millisecond) // Short timeout for testing
 
 	// Open the circuit
-	for i := 0; i < 2; i++ {
-		cb.Call(func() error {
+	for range 2 {
+		_ = cb.Call(func() error {
 			return fmt.Errorf("test error")
 		})
 	}
@@ -113,8 +113,8 @@ func TestCircuitBreaker_HalfOpenFailureReopensCircuit(t *testing.T) {
 	cb := NewCircuitBreaker(2, 50*time.Millisecond)
 
 	// Open the circuit
-	for i := 0; i < 2; i++ {
-		cb.Call(func() error {
+	for range 2 {
+		_ = cb.Call(func() error {
 			return fmt.Errorf("test error")
 		})
 	}
@@ -137,8 +137,8 @@ func TestCircuitBreaker_SuccessResetsFailureCount(t *testing.T) {
 	cb := NewCircuitBreaker(5, 5*time.Minute)
 
 	// Simulate 2 failures
-	for i := 0; i < 2; i++ {
-		cb.Call(func() error {
+	for range 2 {
+		_ = cb.Call(func() error {
 			return fmt.Errorf("test error")
 		})
 	}
@@ -159,8 +159,8 @@ func TestCircuitBreaker_Reset(t *testing.T) {
 	cb := NewCircuitBreaker(2, 5*time.Minute)
 
 	// Open the circuit
-	for i := 0; i < 2; i++ {
-		cb.Call(func() error {
+	for range 2 {
+		_ = cb.Call(func() error {
 			return fmt.Errorf("test error")
 		})
 	}
@@ -198,7 +198,7 @@ func TestCircuitBreaker_PreventRepeatedFailures(t *testing.T) {
 
 	// Simulate 10 failures
 	errorCount := 0
-	for i := 0; i < 10; i++ {
+	for range 10 {
 		err := cb.Call(func() error {
 			errorCount++
 			return fmt.Errorf("API failure")

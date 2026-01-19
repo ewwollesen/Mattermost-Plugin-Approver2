@@ -16,6 +16,7 @@ import (
 	"net/http"
 	"time"
 
+	"github.com/mattermost/mattermost-plugin-approver2/server/approval"
 	"github.com/mattermost/mattermost/server/public/model"
 	"github.com/mattermost/mattermost/server/public/plugin"
 )
@@ -44,8 +45,8 @@ const (
 // This interface is implemented by Client and can be mocked for testing
 type ClientInterface interface {
 	GetPlaybookRunByChannel(channelID string, requesterUserID string) (*PlaybookRun, error)
-	PostMessageToPlaybookChannel(channelID string, message string) (string, error)
-	UpdateMessageInPlaybookChannel(channelID string, postID string, message string) error
+	PostMessageToPlaybookChannel(channelID string, record *approval.ApprovalRecord) (string, error)
+	UpdateMessageInPlaybookChannel(channelID string, postID string, record *approval.ApprovalRecord) error
 	GetMetrics() Metrics
 }
 
@@ -220,15 +221,16 @@ func (c *Client) getPlaybookRunByChannelInternal(channelID string, requesterUser
 
 // PostMessageToPlaybookChannel posts a message to a playbook channel using standard CreatePost
 // GitHub Issue #2: Using CreatePost with markdown tables for nice formatting without Playbooks API side effects
+// Story 9.8: Updated to support custom post type with webapp props
 // Returns the post ID for future updates
-func (c *Client) PostMessageToPlaybookChannel(channelID string, message string) (string, error) {
+func (c *Client) PostMessageToPlaybookChannel(channelID string, record *approval.ApprovalRecord) (string, error) {
 	startTime := time.Now()
 	var postID string
 	var callErr error
 
 	// Wrap in circuit breaker to prevent repeated failures
 	err := c.circuitBreaker.Call(func() error {
-		postID, callErr = c.postMessageToPlaybookChannelInternal(channelID, message)
+		postID, callErr = c.postMessageToPlaybookChannelInternal(channelID, record)
 		return callErr
 	})
 
@@ -260,11 +262,54 @@ func (c *Client) PostMessageToPlaybookChannel(channelID string, message string) 
 
 // postMessageToPlaybookChannelInternal is the internal implementation that posts a message
 // GitHub Issue #2: Using CreatePost with markdown tables for nice formatting without Playbooks API side effects
-func (c *Client) postMessageToPlaybookChannelInternal(channelID string, message string) (string, error) {
+// Story 9.8: Updated to create custom post type with webapp props
+func (c *Client) postMessageToPlaybookChannelInternal(channelID string, record *approval.ApprovalRecord) (string, error) {
+	// AC6: Validate approval record before creating props
+	if record == nil {
+		c.api.LogWarn("Attempted to post with nil approval record, falling back to markdown-only")
+		// Fallback: create basic post without custom type
+		post := &model.Post{
+			UserId:    c.botUserID,
+			ChannelId: channelID,
+			Message:   "⚠️ Approval record data unavailable",
+		}
+		createdPost, appErr := c.api.CreatePost(post)
+		if appErr != nil {
+			return "", fmt.Errorf("failed to create fallback post: %w", appErr)
+		}
+		return createdPost.Id, nil
+	}
+
+	// AC6: Validate required fields
+	if record.Code == "" || record.Status == "" || record.RequesterUsername == "" {
+		c.api.LogWarn("Approval record missing required fields, falling back to markdown-only",
+			"code", record.Code,
+			"status", record.Status,
+			"requester_username", record.RequesterUsername)
+		// Fall back to markdown-only post (no custom type)
+		message := FormatPendingStatusMessage(record)
+		post := &model.Post{
+			UserId:    c.botUserID,
+			ChannelId: channelID,
+			Message:   message,
+		}
+		createdPost, appErr := c.api.CreatePost(post)
+		if appErr != nil {
+			return "", fmt.Errorf("failed to create fallback post: %w", appErr)
+		}
+		return createdPost.Id, nil
+	}
+
+	// Generate markdown fallback message based on status
+	message := FormatPendingStatusMessage(record)
+
+	// Create custom post with webapp props (AC1, AC2, AC3)
 	post := &model.Post{
 		UserId:    c.botUserID,
 		ChannelId: channelID,
-		Message:   message, // Contains markdown table
+		Type:      "custom_approval",                    // Story 9.8: Custom post type for webapp
+		Props:     FormatApprovalPropsForWebapp(record), // Story 9.8: Webapp props
+		Message:   message,                              // Markdown fallback for non-webapp clients
 	}
 
 	createdPost, appErr := c.api.CreatePost(post)
@@ -278,13 +323,14 @@ func (c *Client) postMessageToPlaybookChannelInternal(channelID string, message 
 // UpdateMessageInPlaybookChannel updates an existing post in the playbook channel
 // Used to update the original status post when approval state changes (like DM behavior)
 // GitHub Issue #2: Using UpdatePost instead of Playbooks API
-func (c *Client) UpdateMessageInPlaybookChannel(channelID string, postID string, message string) error {
+// Story 9.8: Updated to update both Message and Props for webapp support
+func (c *Client) UpdateMessageInPlaybookChannel(channelID string, postID string, record *approval.ApprovalRecord) error {
 	startTime := time.Now()
 	var callErr error
 
 	// Wrap in circuit breaker to prevent repeated failures
 	err := c.circuitBreaker.Call(func() error {
-		callErr = c.updateMessageInPlaybookChannelInternal(channelID, postID, message)
+		callErr = c.updateMessageInPlaybookChannelInternal(channelID, postID, record)
 		return callErr
 	})
 
@@ -318,15 +364,38 @@ func (c *Client) UpdateMessageInPlaybookChannel(channelID string, postID string,
 
 // updateMessageInPlaybookChannelInternal updates an existing post
 // GitHub Issue #2: Using UpdatePost instead of Playbooks API
-func (c *Client) updateMessageInPlaybookChannelInternal(channelID string, postID string, message string) error {
+// Story 9.8: Updated to update both Message and Props for webapp support
+func (c *Client) updateMessageInPlaybookChannelInternal(channelID string, postID string, record *approval.ApprovalRecord) error {
 	// Get the existing post
 	existingPost, appErr := c.api.GetPost(postID)
 	if appErr != nil {
 		return fmt.Errorf("failed to get post: %w", appErr)
 	}
 
-	// Update the message content
-	existingPost.Message = message
+	// AC6: Validate approval record before updating
+	if record == nil {
+		c.api.LogWarn("Attempted to update post with nil approval record, keeping original message",
+			"post_id", postID)
+		// Don't update - keep existing post as-is
+		return nil
+	}
+
+	// AC6: Validate required fields
+	if record.Code == "" || record.Status == "" {
+		c.api.LogWarn("Approval record missing required fields, updating markdown only",
+			"post_id", postID,
+			"code", record.Code,
+			"status", record.Status)
+		// Fall back to markdown-only update (clear custom type)
+		existingPost.Type = ""
+		existingPost.Props = nil
+		existingPost.Message = formatStatusMessage(record)
+	} else {
+		// Update post with new status (full custom post type support)
+		existingPost.Type = "custom_approval"                     // Ensure type remains set
+		existingPost.Props = FormatApprovalPropsForWebapp(record) // Update props with new data
+		existingPost.Message = formatStatusMessage(record)        // Update markdown fallback
+	}
 
 	// Update the post
 	_, appErr = c.api.UpdatePost(existingPost)
@@ -335,6 +404,23 @@ func (c *Client) updateMessageInPlaybookChannelInternal(channelID string, postID
 	}
 
 	return nil
+}
+
+// formatStatusMessage returns appropriate markdown based on status
+// Story 9.8: Helper to format markdown fallback message for current status
+func formatStatusMessage(record *approval.ApprovalRecord) string {
+	switch record.Status {
+	case approval.StatusApproved:
+		return FormatApprovedStatusMessage(record)
+	case approval.StatusDenied:
+		return FormatDeniedStatusMessage(record)
+	case approval.StatusCanceled:
+		return FormatCanceledStatusMessage(record)
+	case approval.StatusTimeout:
+		return FormatTimedOutStatusMessage(record)
+	default:
+		return FormatPendingStatusMessage(record)
+	}
 }
 
 // GetMetrics returns a snapshot of current metrics
@@ -352,4 +438,3 @@ func (c *Client) GetCircuitBreakerState() CircuitState {
 	}
 	return c.circuitBreaker.GetState()
 }
-

@@ -81,10 +81,10 @@ func TestMetrics_AverageLatency(t *testing.T) {
 
 func TestMetrics_GetDetectionSuccessRate(t *testing.T) {
 	tests := []struct {
-		name            string
-		successes       int
-		failures        int
-		expectedRate    float64
+		name         string
+		successes    int
+		failures     int
+		expectedRate float64
 	}{
 		{"no calls", 0, 0, 100.0},
 		{"all successful", 10, 0, 100.0},
@@ -111,10 +111,10 @@ func TestMetrics_GetDetectionSuccessRate(t *testing.T) {
 
 func TestMetrics_GetStatusPostSuccessRate(t *testing.T) {
 	tests := []struct {
-		name            string
-		successes       int
-		failures        int
-		expectedRate    float64
+		name         string
+		successes    int
+		failures     int
+		expectedRate float64
 	}{
 		{"no calls", 0, 0, 100.0},
 		{"all successful", 10, 0, 100.0},
@@ -198,9 +198,9 @@ func TestMetrics_ThreadSafety(t *testing.T) {
 	done := make(chan bool)
 
 	// Spawn 10 goroutines recording detections
-	for i := 0; i < 10; i++ {
+	for range 10 {
 		go func() {
-			for j := 0; j < 100; j++ {
+			for range 100 {
 				m.RecordDetection(true, 10*time.Millisecond)
 			}
 			done <- true
@@ -208,9 +208,9 @@ func TestMetrics_ThreadSafety(t *testing.T) {
 	}
 
 	// Spawn 10 goroutines recording status posts
-	for i := 0; i < 10; i++ {
+	for range 10 {
 		go func() {
-			for j := 0; j < 100; j++ {
+			for range 100 {
 				m.RecordStatusPost(true, 10*time.Millisecond)
 			}
 			done <- true
@@ -218,7 +218,7 @@ func TestMetrics_ThreadSafety(t *testing.T) {
 	}
 
 	// Wait for all goroutines
-	for i := 0; i < 20; i++ {
+	for range 20 {
 		<-done
 	}
 

@@ -29,19 +29,20 @@ func (m *MockPlaybooksClient) GetPlaybookRunByChannel(channelID string, requeste
 	return nil, args.Error(1)
 }
 
-func (m *MockPlaybooksClient) PostMessageToPlaybookChannel(channelID string, message string) (string, error) {
-	args := m.Called(channelID, message)
+func (m *MockPlaybooksClient) PostMessageToPlaybookChannel(channelID string, record *approval.ApprovalRecord) (string, error) {
+	args := m.Called(channelID, record)
 	return args.String(0), args.Error(1)
 }
 
-func (m *MockPlaybooksClient) UpdateMessageInPlaybookChannel(channelID string, postID string, message string) error {
-	args := m.Called(channelID, postID, message)
+func (m *MockPlaybooksClient) UpdateMessageInPlaybookChannel(channelID string, postID string, record *approval.ApprovalRecord) error {
+	args := m.Called(channelID, postID, record)
 	return args.Error(0)
 }
 
 func (m *MockPlaybooksClient) GetMetrics() playbooks.Metrics {
-	args := m.Called()
-	return args.Get(0).(playbooks.Metrics)
+	m.Called() // Record the call for mock verification
+	// Return empty metrics to avoid mutex copy (mocks don't need real metrics)
+	return playbooks.Metrics{}
 }
 
 // PlaybookRun type alias for test convenience
@@ -1900,127 +1901,6 @@ func TestHandleApproveNew_PlaybookContext(t *testing.T) {
 	})
 }
 
-// Story 8.3: Tests for formatPendingPlaybookStatusMessage
-func TestFormatPendingPlaybookStatusMessage(t *testing.T) {
-	t.Run("formats message with all components", func(t *testing.T) {
-		record := &approval.ApprovalRecord{
-			Code:        "A-X7K9Q2",
-			Description: "Deploy v2.1.0 to production",
-		}
-
-		message := formatPendingPlaybookStatusMessage(record, "jane.doe")
-
-		// Verify message contains all required components (AC2, AC4, AC5) - markdown table format
-		assert.Contains(t, message, "⏳", "Should contain emoji indicator")
-		assert.Contains(t, message, "Approval Pending", "Should contain status header")
-		assert.Contains(t, message, "A-X7K9Q2", "Should contain reference code")
-		assert.Contains(t, message, "Deploy v2.1.0 to production", "Should contain description")
-		assert.Contains(t, message, "@jane.doe", "Should contain approver mention")
-
-		// Verify markdown table structure
-		assert.Contains(t, message, "| Field | Value |")
-		assert.Contains(t, message, "| **Request ID** |")
-		assert.Contains(t, message, "| **Description** |")
-		assert.Contains(t, message, "| **Awaiting** |")
-	})
-
-	t.Run("truncates long descriptions", func(t *testing.T) {
-		longDescription := "This is a very long description that definitely exceeds eighty characters and needs to be truncated appropriately"
-		record := &approval.ApprovalRecord{
-			Code:        "A-TEST01",
-			Description: longDescription,
-		}
-
-		message := formatPendingPlaybookStatusMessage(record, "approver")
-
-		// Verify description is truncated to 80 chars (AC2) - markdown table format
-		assert.Contains(t, message, "...", "Truncated message should end with ellipsis")
-		assert.NotContains(t, message, longDescription, "Full description should not appear")
-		// Verify table structure is intact
-		assert.Contains(t, message, "| **Description** |")
-	})
-
-	t.Run("handles exactly 80 character descriptions", func(t *testing.T) {
-		// Create description of exactly 80 characters
-		description := strings.Repeat("a", 80)
-		record := &approval.ApprovalRecord{
-			Code:        "A-TEST02",
-			Description: description,
-		}
-
-		message := formatPendingPlaybookStatusMessage(record, "user")
-
-		// Should not be truncated at exactly 80 chars
-		assert.Contains(t, message, description)
-		assert.NotContains(t, message, "...", "Should not truncate at exactly 80 chars")
-	})
-
-	t.Run("handles short descriptions", func(t *testing.T) {
-		record := &approval.ApprovalRecord{
-			Code:        "A-TEST03",
-			Description: "Short",
-		}
-
-		message := formatPendingPlaybookStatusMessage(record, "user")
-
-		// Should not be truncated
-		assert.Contains(t, message, "Short")
-		assert.NotContains(t, message, "...", "Should not truncate short descriptions")
-	})
-
-	t.Run("handles special characters in username", func(t *testing.T) {
-		record := &approval.ApprovalRecord{
-			Code:        "A-TEST04",
-			Description: "Test approval",
-		}
-
-		message := formatPendingPlaybookStatusMessage(record, "user.name-123")
-
-		assert.Contains(t, message, "@user.name-123", "Should handle special chars in username")
-	})
-
-	t.Run("handles unicode and emoji in description", func(t *testing.T) {
-		record := &approval.ApprovalRecord{
-			Code:        "A-TEST05",
-			Description: "部署到生产环境 🚀 déploiement en production",
-		}
-
-		message := formatPendingPlaybookStatusMessage(record, "user")
-
-		// Should contain unicode and emoji without corruption
-		assert.Contains(t, message, "部署到生产环境 🚀 déploiement en production")
-		assert.Contains(t, message, "A-TEST05")
-	})
-
-	t.Run("handles empty code gracefully", func(t *testing.T) {
-		record := &approval.ApprovalRecord{
-			Code:        "",
-			Description: "Test approval",
-		}
-
-		message := formatPendingPlaybookStatusMessage(record, "user")
-
-		// Should use fallback code
-		assert.Contains(t, message, "UNKNOWN")
-		assert.Contains(t, message, "Test approval")
-		assert.Contains(t, message, "@user")
-	})
-
-	t.Run("handles empty username gracefully", func(t *testing.T) {
-		record := &approval.ApprovalRecord{
-			Code:        "A-TEST06",
-			Description: "Test approval",
-		}
-
-		message := formatPendingPlaybookStatusMessage(record, "")
-
-		// Should use fallback username
-		assert.Contains(t, message, "@approver")
-		assert.Contains(t, message, "A-TEST06")
-		assert.Contains(t, message, "Test approval")
-	})
-}
-
 // Story 8.3: Integration tests for playbook status posting
 func TestHandleApproveNew_PlaybookStatusPosting(t *testing.T) {
 	t.Run("posts status to playbook channel and stores post ID", func(t *testing.T) {
@@ -2037,13 +1917,12 @@ func TestHandleApproveNew_PlaybookStatusPosting(t *testing.T) {
 			Name:      "Incident #47",
 			ChannelID: "channel123",
 		}, nil)
-		mockPlaybooksClient.On("PostMessageToPlaybookChannel", "channel123", mock.MatchedBy(func(msg string) bool {
-			// Verify message format (AC2) - now using markdown table
-			return strings.Contains(msg, "⏳") &&
-				strings.Contains(msg, "Approval Pending") &&
-				strings.Contains(msg, "@bob") &&
-				strings.Contains(msg, "| Field | Value |") &&
-				strings.Contains(msg, "| **Request ID** |")
+		mockPlaybooksClient.On("PostMessageToPlaybookChannel", "channel123", mock.MatchedBy(func(record *approval.ApprovalRecord) bool {
+			// Story 9.8: Verify approval record is passed correctly
+			return record != nil &&
+				record.Status == approval.StatusPending &&
+				record.RequesterUsername == "alice" &&
+				record.ApproverUsername == "bob"
 		})).Return("post789", nil)
 		plugin.playbooksClient = mockPlaybooksClient
 

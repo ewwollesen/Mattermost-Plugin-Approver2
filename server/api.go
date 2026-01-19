@@ -11,7 +11,6 @@ import (
 	"github.com/mattermost/mattermost-plugin-approver2/server/approval"
 	"github.com/mattermost/mattermost-plugin-approver2/server/command"
 	"github.com/mattermost/mattermost-plugin-approver2/server/notifications"
-	"github.com/mattermost/mattermost-plugin-approver2/server/playbooks"
 	"github.com/mattermost/mattermost-plugin-approver2/server/store"
 	"github.com/mattermost/mattermost/server/public/model"
 	"github.com/mattermost/mattermost/server/public/plugin"
@@ -63,7 +62,7 @@ func (p *Plugin) HelloWorld(w http.ResponseWriter, r *http.Request) {
 func (p *Plugin) handlePlaybooksHealth(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 
-	response := map[string]interface{}{
+	response := map[string]any{
 		"enabled": p.playbooksClient != nil,
 	}
 
@@ -71,22 +70,22 @@ func (p *Plugin) handlePlaybooksHealth(w http.ResponseWriter, r *http.Request) {
 		// Get metrics snapshot
 		metrics := p.playbooksClient.GetMetrics()
 
-		response["metrics"] = map[string]interface{}{
-			"detection": map[string]interface{}{
-				"calls":        metrics.DetectionCalls,
-				"success":      metrics.DetectionSuccess,
-				"failed":       metrics.DetectionFailed,
-				"success_rate": metrics.GetDetectionSuccessRate(),
+		response["metrics"] = map[string]any{
+			"detection": map[string]any{
+				"calls":          metrics.DetectionCalls,
+				"success":        metrics.DetectionSuccess,
+				"failed":         metrics.DetectionFailed,
+				"success_rate":   metrics.GetDetectionSuccessRate(),
 				"avg_latency_ms": metrics.DetectionLatency.Milliseconds(),
 			},
-			"status_post": map[string]interface{}{
-				"calls":        metrics.StatusPostCalls,
-				"success":      metrics.StatusPostSuccess,
-				"failed":       metrics.StatusPostFailed,
-				"success_rate": metrics.GetStatusPostSuccessRate(),
+			"status_post": map[string]any{
+				"calls":          metrics.StatusPostCalls,
+				"success":        metrics.StatusPostSuccess,
+				"failed":         metrics.StatusPostFailed,
+				"success_rate":   metrics.GetStatusPostSuccessRate(),
 				"avg_latency_ms": metrics.StatusPostLatency.Milliseconds(),
 			},
-			"circuit_breaker": map[string]interface{}{
+			"circuit_breaker": map[string]any{
 				"state":       metrics.CircuitBreakerState.String(),
 				"opens_count": metrics.CircuitBreakerOpens,
 			},
@@ -244,12 +243,16 @@ func (p *Plugin) handleApproveNew(payload *model.SubmitDialogRequest) *model.Sub
 	if p.playbooksClient != nil {
 		run, pbErr := p.playbooksClient.GetPlaybookRunByChannel(payload.ChannelId, payload.UserId)
 		if pbErr != nil {
-			// Log warning but continue - playbook detection is best effort
-			p.API.LogWarn("Failed to detect playbook context during approval creation",
-				"channel_id", payload.ChannelId,
-				"approval_id", record.ID,
-				"user_id", payload.UserId,
-				"error", pbErr.Error())
+			// Only log if it's NOT a "not found" error (reduces log noise for non-playbook channels)
+			// Note: Playbooks plugin itself will log "not found" at WARN level, which is expected
+			errorMsg := pbErr.Error()
+			if !strings.Contains(errorMsg, "not found") && !strings.Contains(errorMsg, "404") {
+				p.API.LogWarn("Failed to detect playbook context during approval creation",
+					"channel_id", payload.ChannelId,
+					"approval_id", record.ID,
+					"user_id", payload.UserId,
+					"error", errorMsg)
+			}
 		} else if run != nil {
 			// Populate playbook fields
 			record.PlaybookRunID = run.ID
@@ -313,10 +316,9 @@ func (p *Plugin) handleApproveNew(payload *model.SubmitDialogRequest) *model.Sub
 
 	// Story 8.3: Post status to playbook channel if this is a playbook-linked approval
 	// GitHub Issue #2: Using CreatePost with markdown tables for nice formatting without Playbooks API side effects
+	// Story 9.8: Updated to pass approval record for custom post type support
 	if record.PlaybookRunID != "" && p.playbooksClient != nil {
-		message := formatPendingPlaybookStatusMessage(record, approver.Username)
-
-		postID, err := p.playbooksClient.PostMessageToPlaybookChannel(record.PlaybookChannelID, message)
+		postID, err := p.playbooksClient.PostMessageToPlaybookChannel(record.PlaybookChannelID, record)
 		if err != nil {
 			// Log warning but continue - playbook posting is best effort (AC7)
 			p.API.LogWarn("Failed to post status to playbook channel",
@@ -642,49 +644,40 @@ func (p *Plugin) handleConfirmDecision(payload *model.SubmitDialogRequest) *mode
 
 	// Story 8.5: Post status update to playbook channel if playbook-linked (best effort, AC8)
 	// GitHub Issue #2: UPDATE existing post instead of creating new ones (like DM behavior)
+	// Story 9.8: Updated to pass approval record for custom post type support
 	if updatedRecord.PlaybookRunID != "" && p.playbooksClient != nil {
-		var statusMessage string
-		if updatedRecord.Status == approval.StatusApproved {
-			statusMessage = playbooks.FormatApprovedStatusMessage(updatedRecord)
+		// Update existing post if we have the ID, otherwise create new one
+		if updatedRecord.PlaybookPostID != "" {
+			err := p.playbooksClient.UpdateMessageInPlaybookChannel(
+				updatedRecord.PlaybookChannelID,
+				updatedRecord.PlaybookPostID,
+				updatedRecord,
+			)
+			if err != nil {
+				// AC8: Log error but don't block decision processing (graceful degradation)
+				p.API.LogWarn("Failed to update playbook status",
+					"approval_id", approvalID,
+					"playbook_run_id", updatedRecord.PlaybookRunID,
+					"playbook_post_id", updatedRecord.PlaybookPostID,
+					"status_type", "decision",
+					"decision", decision,
+					"error", err.Error(),
+				)
+			}
 		} else {
-			statusMessage = playbooks.FormatDeniedStatusMessage(updatedRecord)
-		}
-
-		// Validate message is not empty before posting
-		if statusMessage != "" {
-			// Update existing post if we have the ID, otherwise create new one
-			if updatedRecord.PlaybookPostID != "" {
-				err := p.playbooksClient.UpdateMessageInPlaybookChannel(
-					updatedRecord.PlaybookChannelID,
-					updatedRecord.PlaybookPostID,
-					statusMessage,
+			// Fallback: create new post if we don't have the original post ID
+			_, err := p.playbooksClient.PostMessageToPlaybookChannel(
+				updatedRecord.PlaybookChannelID,
+				updatedRecord,
+			)
+			if err != nil {
+				p.API.LogWarn("Failed to post approval status to playbook channel",
+					"approval_id", approvalID,
+					"playbook_run_id", updatedRecord.PlaybookRunID,
+					"status_type", "decision",
+					"decision", decision,
+					"error", err.Error(),
 				)
-				if err != nil {
-					// AC8: Log error but don't block decision processing (graceful degradation)
-					p.API.LogWarn("Failed to update playbook status",
-						"approval_id", approvalID,
-						"playbook_run_id", updatedRecord.PlaybookRunID,
-						"playbook_post_id", updatedRecord.PlaybookPostID,
-						"status_type", "decision",
-						"decision", decision,
-						"error", err.Error(),
-					)
-				}
-			} else {
-				// Fallback: create new post if we don't have the original post ID
-				_, err := p.playbooksClient.PostMessageToPlaybookChannel(
-					updatedRecord.PlaybookChannelID,
-					statusMessage,
-				)
-				if err != nil {
-					p.API.LogWarn("Failed to post approval status to playbook channel",
-						"approval_id", approvalID,
-						"playbook_run_id", updatedRecord.PlaybookRunID,
-						"status_type", "decision",
-						"decision", decision,
-						"error", err.Error(),
-					)
-				}
 			}
 		}
 	}
@@ -928,42 +921,38 @@ func (p *Plugin) handleCancelModalSubmission(payload *model.SubmitDialogRequest)
 
 		// Story 8.5: Post cancellation status to playbook channel if playbook-linked (AC3, AC8)
 		// GitHub Issue #2: UPDATE existing post instead of creating new ones (like DM behavior)
+		// Story 9.8: Updated to pass approval record for custom post type support
 		if updatedRecord.PlaybookRunID != "" && p.playbooksClient != nil {
-			statusMessage := playbooks.FormatCanceledStatusMessage(updatedRecord)
-
-			// Validate message is not empty before posting
-			if statusMessage != "" {
-				// Update existing post if we have the ID, otherwise create new one
-				if updatedRecord.PlaybookPostID != "" {
-					err := p.playbooksClient.UpdateMessageInPlaybookChannel(
-						updatedRecord.PlaybookChannelID,
-						updatedRecord.PlaybookPostID,
-						statusMessage,
+			// Update existing post if we have the ID, otherwise create new one
+			if updatedRecord.PlaybookPostID != "" {
+				err := p.playbooksClient.UpdateMessageInPlaybookChannel(
+					updatedRecord.PlaybookChannelID,
+					updatedRecord.PlaybookPostID,
+					updatedRecord,
+				)
+				if err != nil {
+					// AC8: Log error but don't block cancellation processing
+					p.API.LogWarn("Failed to update playbook status",
+						"approval_code", updatedRecord.Code,
+						"playbook_run_id", updatedRecord.PlaybookRunID,
+						"playbook_post_id", updatedRecord.PlaybookPostID,
+						"status_type", "cancellation",
+						"error", err.Error(),
 					)
-					if err != nil {
-						// AC8: Log error but don't block cancellation processing
-						p.API.LogWarn("Failed to update playbook status",
-							"approval_code", updatedRecord.Code,
-							"playbook_run_id", updatedRecord.PlaybookRunID,
-							"playbook_post_id", updatedRecord.PlaybookPostID,
-							"status_type", "cancellation",
-							"error", err.Error(),
-						)
-					}
-				} else {
-					// Fallback: create new post if we don't have the original post ID
-					_, err := p.playbooksClient.PostMessageToPlaybookChannel(
-						updatedRecord.PlaybookChannelID,
-						statusMessage,
+				}
+			} else {
+				// Fallback: create new post if we don't have the original post ID
+				_, err := p.playbooksClient.PostMessageToPlaybookChannel(
+					updatedRecord.PlaybookChannelID,
+					updatedRecord,
+				)
+				if err != nil {
+					p.API.LogWarn("Failed to post approval status to playbook channel",
+						"approval_code", updatedRecord.Code,
+						"playbook_run_id", updatedRecord.PlaybookRunID,
+						"status_type", "cancellation",
+						"error", err.Error(),
 					)
-					if err != nil {
-						p.API.LogWarn("Failed to post approval status to playbook channel",
-							"approval_code", updatedRecord.Code,
-							"playbook_run_id", updatedRecord.PlaybookRunID,
-							"status_type", "cancellation",
-							"error", err.Error(),
-						)
-					}
 				}
 			}
 		}
@@ -996,35 +985,4 @@ func (p *Plugin) mapCancellationReason(code string) string {
 	}
 }
 
-// formatPendingPlaybookStatusMessage formats the initial "pending" status message for playbook channels
-// GitHub Issue #2: Using markdown table for nice formatting without Playbooks API side effects
-func formatPendingPlaybookStatusMessage(record *approval.ApprovalRecord, approverUsername string) string {
-	// Handle edge cases for required fields
-	code := record.Code
-	if code == "" {
-		code = "UNKNOWN"
-	}
-
-	username := approverUsername
-	if username == "" {
-		username = "approver"
-	}
-
-	// Truncate description using UTF-8-safe rune counting (same as formatters.go)
-	details := record.Description
-	if len([]rune(details)) > 80 {
-		runes := []rune(details)
-		details = string(runes[:77]) + "..."
-	}
-
-	return fmt.Sprintf(`### ⏳ Approval Pending
-
-| Field | Value |
-|:------|:------|
-| **Request ID** | %s |
-| **Description** | %s |
-| **Awaiting** | @%s |`,
-		code,
-		details,
-		username)
-}
+// Story 9.8: formatPendingPlaybookStatusMessage removed - formatting now handled by playbooks.FormatPendingStatusMessage()
