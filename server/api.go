@@ -161,8 +161,8 @@ func (p *Plugin) handleDialogSubmit(w http.ResponseWriter, r *http.Request) {
 // All errors are logged at this highest layer per Mattermost conventions.
 // Field-specific errors return to modal; general errors close modal.
 func (p *Plugin) handleApproveNew(payload *model.SubmitDialogRequest) *model.SubmitDialogResponse {
-	// Layer 1: Basic field presence validation
-	response := command.HandleDialogSubmission(payload.Submission)
+	// Layer 1: Basic field presence validation (GitHub Issue #4: includes self-approval check)
+	response := command.HandleDialogSubmission(payload.Submission, payload.UserId)
 	if len(response.Errors) > 0 {
 		return response
 	}
@@ -185,6 +185,16 @@ func (p *Plugin) handleApproveNew(payload *model.SubmitDialogRequest) *model.Sub
 	}
 
 	// Layer 2: Business logic validation
+
+	// GitHub Issue #4: Defense-in-depth self-approval check
+	if approverID == payload.UserId {
+		p.API.LogWarn("Self-approval attempt detected", "requester_id", payload.UserId, "approver_id", approverID)
+		return &model.SubmitDialogResponse{
+			Errors: map[string]string{
+				"approver": "You cannot approve your own request. Please select a different approver.",
+			},
+		}
+	}
 
 	// Validate description length (AC4: Validate Description Length)
 	if err := approval.ValidateDescription(description); err != nil {

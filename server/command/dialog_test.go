@@ -15,7 +15,7 @@ func TestHandleDialogSubmission(t *testing.T) {
 			"description": "Test approval request description",
 		}
 
-		response := HandleDialogSubmission(submission)
+		response := HandleDialogSubmission(submission, "different-requester-id")
 		assert.NotNil(t, response)
 		assert.Empty(t, response.Error)
 		assert.Empty(t, response.Errors)
@@ -26,7 +26,7 @@ func TestHandleDialogSubmission(t *testing.T) {
 			"description": "Test approval request description",
 		}
 
-		response := HandleDialogSubmission(submission)
+		response := HandleDialogSubmission(submission, "requester-id")
 		assert.NotNil(t, response)
 		assert.NotEmpty(t, response.Errors)
 		assert.Contains(t, response.Errors, "approver")
@@ -40,7 +40,7 @@ func TestHandleDialogSubmission(t *testing.T) {
 			"description": "Test approval request description",
 		}
 
-		response := HandleDialogSubmission(submission)
+		response := HandleDialogSubmission(submission, "requester-id")
 		assert.NotNil(t, response)
 		assert.NotEmpty(t, response.Errors)
 		assert.Contains(t, response.Errors, "approver")
@@ -52,7 +52,7 @@ func TestHandleDialogSubmission(t *testing.T) {
 			"approver": "user-id-abcdefghijklmnopqrstuvwxyz",
 		}
 
-		response := HandleDialogSubmission(submission)
+		response := HandleDialogSubmission(submission, "requester-id")
 		assert.NotNil(t, response)
 		assert.NotEmpty(t, response.Errors)
 		assert.Contains(t, response.Errors, "description")
@@ -66,7 +66,7 @@ func TestHandleDialogSubmission(t *testing.T) {
 			"description": "",
 		}
 
-		response := HandleDialogSubmission(submission)
+		response := HandleDialogSubmission(submission, "requester-id")
 		assert.NotNil(t, response)
 		assert.NotEmpty(t, response.Errors)
 		assert.Contains(t, response.Errors, "description")
@@ -76,7 +76,7 @@ func TestHandleDialogSubmission(t *testing.T) {
 	t.Run("returns errors for both fields missing", func(t *testing.T) {
 		submission := map[string]any{}
 
-		response := HandleDialogSubmission(submission)
+		response := HandleDialogSubmission(submission, "requester-id")
 		assert.NotNil(t, response)
 		assert.NotEmpty(t, response.Errors)
 		assert.Contains(t, response.Errors, "approver")
@@ -89,7 +89,7 @@ func TestHandleDialogSubmission(t *testing.T) {
 			"description": "Test approval request description",
 		}
 
-		response := HandleDialogSubmission(submission)
+		response := HandleDialogSubmission(submission, "requester-id")
 		assert.NotNil(t, response)
 		assert.NotEmpty(t, response.Errors)
 		assert.Contains(t, response.Errors, "approver")
@@ -101,10 +101,39 @@ func TestHandleDialogSubmission(t *testing.T) {
 			"description": []string{"invalid", "type"}, // Invalid type
 		}
 
-		response := HandleDialogSubmission(submission)
+		response := HandleDialogSubmission(submission, "requester-id")
 		assert.NotNil(t, response)
 		assert.NotEmpty(t, response.Errors)
 		assert.Contains(t, response.Errors, "description")
+	})
+
+	// GitHub Issue #4: Prevent self-approval
+	t.Run("rejects self-approval when requester equals approver", func(t *testing.T) {
+		submission := map[string]any{
+			"approver":    "same-user-id-abcdefghijklmnopqrstuvwxyz",
+			"description": "Test approval request description",
+		}
+		requesterID := "same-user-id-abcdefghijklmnopqrstuvwxyz"
+
+		response := HandleDialogSubmission(submission, requesterID)
+		assert.NotNil(t, response)
+		assert.NotEmpty(t, response.Errors)
+		assert.Contains(t, response.Errors, "approver")
+		assert.Contains(t, response.Errors["approver"], "cannot approve your own request")
+		assert.Contains(t, response.Errors["approver"], "select a different approver")
+	})
+
+	t.Run("allows different requester and approver", func(t *testing.T) {
+		submission := map[string]any{
+			"approver":    "approver-id-abcdefghijklmnopqrstuvwxyz",
+			"description": "Test approval request description",
+		}
+		requesterID := "requester-id-abcdefghijklmnopqrstuvwxyz"
+
+		response := HandleDialogSubmission(submission, requesterID)
+		assert.NotNil(t, response)
+		assert.Empty(t, response.Error)
+		assert.Empty(t, response.Errors)
 	})
 }
 

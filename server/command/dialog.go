@@ -11,10 +11,11 @@ import (
 // Performs basic presence validation for required fields:
 // - approver: Must be present and non-empty
 // - description: Must be present and non-empty
+// - requester != approver: GitHub Issue #4 - Prevents self-approval
 //
 // Returns field-specific errors that keep the modal open, preserving user input.
 // Error messages follow UX guidelines: specific, actionable, helpful tone.
-func HandleDialogSubmission(submission map[string]any) *model.SubmitDialogResponse {
+func HandleDialogSubmission(submission map[string]any, requesterID string) *model.SubmitDialogResponse {
 	response := &model.SubmitDialogResponse{
 		Errors: make(map[string]string),
 	}
@@ -29,6 +30,11 @@ func HandleDialogSubmission(submission map[string]any) *model.SubmitDialogRespon
 	description, ok := submission["description"].(string)
 	if !ok || description == "" {
 		response.Errors["description"] = "Description field is required. Please describe what needs approval."
+	}
+
+	// GitHub Issue #4: Prevent self-approval (AC1)
+	if approver != "" && approver == requesterID {
+		response.Errors["approver"] = "You cannot approve your own request. Please select a different approver."
 	}
 
 	return response

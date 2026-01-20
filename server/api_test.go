@@ -2149,3 +2149,103 @@ func TestHandleApproveNew_PlaybookStatusPosting(t *testing.T) {
 		api.AssertExpectations(t)
 	})
 }
+
+// GitHub Issue #4: Prevent self-approval requests
+func TestHandleApproveNew_SelfApprovalRejection(t *testing.T) {
+	t.Run("rejects self-approval in Layer 1 validation", func(t *testing.T) {
+		// Setup
+		api := &plugintest.API{}
+		plugin := &Plugin{}
+		plugin.SetAPI(api)
+		plugin.botUserID = "bot123"
+
+		// Mock logging (Layer 2 LogWarn won't be called - Layer 1 catches it first)
+		api.On("LogInfo", mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything).Maybe()
+
+		// Create payload with same user as requester and approver
+		payload := &model.SubmitDialogRequest{
+			UserId:     "same-user-id",
+			ChannelId:  "channel123",
+			TeamId:     "team789",
+			CallbackId: "approve_new",
+			Submission: map[string]any{
+				"approver":    "same-user-id",
+				"description": "Trying to approve my own request",
+			},
+		}
+
+		// Execute
+		response := plugin.handleApproveNew(payload)
+
+		// Verify - should be rejected by HandleDialogSubmission (Layer 1)
+		assert.NotNil(t, response)
+		assert.Empty(t, response.Error) // Field-specific error, not general error
+		assert.NotEmpty(t, response.Errors)
+		assert.Contains(t, response.Errors, "approver")
+		assert.Contains(t, response.Errors["approver"], "cannot approve your own request")
+		assert.Contains(t, response.Errors["approver"], "select a different approver")
+
+		api.AssertExpectations(t)
+	})
+
+	t.Run("allows different requester and approver", func(t *testing.T) {
+		// Setup
+		api := &plugintest.API{}
+		plugin := &Plugin{}
+		plugin.SetAPI(api)
+		plugin.botUserID = "bot123"
+
+		// Mock user lookups
+		requester := &model.User{
+			Id:        "requester123",
+			Username:  "alice",
+			FirstName: "Alice",
+			LastName:  "Carter",
+		}
+
+		approver := &model.User{
+			Id:        "approver456",
+			Username:  "bob",
+			FirstName: "Bob",
+			LastName:  "Smith",
+		}
+
+		api.On("GetUser", "requester123").Return(requester, nil)
+		api.On("GetUser", "approver456").Return(approver, nil)
+
+		// Mock KV store operations
+		api.On("KVGet", mock.Anything).Return(nil, nil)
+		api.On("KVSet", mock.Anything, mock.Anything).Return(nil)
+
+		// Mock notifications
+		api.On("GetDirectChannel", "bot123", "approver456").Return(&model.Channel{Id: "dm_channel"}, nil)
+		api.On("CreatePost", mock.Anything).Return(&model.Post{}, nil)
+		api.On("SendEphemeralPost", "requester123", mock.Anything).Return(&model.Post{})
+
+		// Mock logging
+		api.On("LogInfo", mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything).Maybe()
+		api.On("LogError", mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything).Maybe()
+
+		// Create payload with different users
+		payload := &model.SubmitDialogRequest{
+			UserId:     "requester123",
+			ChannelId:  "channel123",
+			TeamId:     "team789",
+			CallbackId: "approve_new",
+			Submission: map[string]any{
+				"approver":    "approver456",
+				"description": "Valid approval request",
+			},
+		}
+
+		// Execute
+		response := plugin.handleApproveNew(payload)
+
+		// Verify - should succeed (no errors)
+		assert.NotNil(t, response)
+		assert.Empty(t, response.Error)
+		assert.Empty(t, response.Errors)
+
+		api.AssertExpectations(t)
+	})
+}
