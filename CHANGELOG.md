@@ -10,6 +10,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Changed
 - Nothing yet
 
+## [2.3.1] - 2026-01-20
+
+**Bug Fix: Self-Approval Prevention**
+
+### Fixed
+- **GitHub Issue #4** - Users can no longer select themselves as approvers for their own requests
+- Added two-layer validation (dialog submission + API handler) to enforce separation of duties
+- Error message: "You cannot approve your own request. Please select a different approver."
+
+### Technical
+- Updated `HandleDialogSubmission()` signature to accept requesterID parameter
+- Added self-approval validation in dialog handler (Layer 1)
+- Added defense-in-depth check in `handleApproveNew()` (Layer 2)
+- 4 new tests added, 8 existing tests updated
+- All 665 server tests + 91 webapp tests pass
+
 ## [2.3.0] - 2026-01-19
 
 **DM Notifications with Interactive Buttons**
@@ -167,7 +183,8 @@ Initial MVP release with complete approval workflow functionality.
 - **Minimum Go version**: 1.19+
 - **Breaking changes** will always be documented in the CHANGELOG with upgrade instructions
 
-[Unreleased]: https://github.com/ewwollesen/Mattermost-Plugin-Approver2/compare/v2.3.0...HEAD
+[Unreleased]: https://github.com/ewwollesen/Mattermost-Plugin-Approver2/compare/v2.3.1...HEAD
+[2.3.1]: https://github.com/ewwollesen/Mattermost-Plugin-Approver2/releases/tag/v2.3.1
 [2.3.0]: https://github.com/ewwollesen/Mattermost-Plugin-Approver2/releases/tag/v2.3.0
 [2.2.0]: https://github.com/ewwollesen/Mattermost-Plugin-Approver2/releases/tag/v2.2.0
 [2.0.0]: https://github.com/ewwollesen/Mattermost-Plugin-Approver2/releases/tag/v2.0.0
