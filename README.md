@@ -14,6 +14,10 @@ Get formal approval without email chains, paper forms, or leaving your chat work
 - Policy exception requests
 - Any decision that needs a paper trail
 
+**Native Mattermost Playbooks Integration:**
+
+When used within a [Mattermost Playbooks](https://mattermost.com/playbooks/) incident channel, approval status posts automatically appear in the channel timeline - keeping your incident response coordinated and auditable
+
 ## Quick Start
 
 ### Installation
@@ -53,12 +57,22 @@ The approver receives an instant DM with **Approve** and **Deny** buttons. They 
 ### Core Functionality
 
 - **Interactive approval requests** - Modal-based creation with user picker
-- **Instant DM notifications** - Approvers get one-click approve/deny buttons
+- **Instant DM notifications** - Approvers get one-click approve/deny buttons with interactive webapp components
 - **Human-friendly reference codes** - Easy-to-share IDs like `TUZ-2RK` or `A-X7K9Q2`
 - **Professional table output** - Results displayed in clean, readable markdown tables
 - **Slash command autocomplete** - Discover commands and options as you type
 - **Immutable audit trail** - Approval records can't be modified after creation
+- **Timezone-aware timestamps** - All timestamps display in your local timezone
 - **No external dependencies** - Pure Mattermost integration using KV store
+
+### Mattermost Playbooks Integration
+
+- **Automatic channel detection** - Plugin detects when you're in a Playbooks incident channel
+- **Status posts in channel** - Approval requests and decisions appear in the channel timeline
+- **Custom webapp components** - Rich, interactive approval cards (not just markdown)
+- **Live updates** - Status posts update when approvals are decided or canceled
+- **Circuit breaker protection** - Graceful degradation if Playbooks is unavailable
+- **Permission-aware** - Uses requester's context for proper access control
 
 ### Advanced Features
 
@@ -81,6 +95,51 @@ The approver receives an instant DM with **Approve** and **Deny** buttons. They 
 6. **Optional Verification** - Approved requests can be marked as verified
 
 At any point, either party can view the approval record with `/approve get [CODE]`.
+
+## Mattermost Playbooks Integration
+
+When you create an approval request from within a **Mattermost Playbooks incident channel**, the plugin automatically posts status updates to the channel timeline.
+
+### How It Works
+
+1. **Automatic Detection** - The plugin calls the Playbooks API to check if the current channel is an active playbook run
+2. **Status Post Created** - A rich status post appears in the channel showing the approval request
+3. **Live Updates** - When the approval is decided, canceled, or times out, the original post updates
+4. **Webapp Components** - Users with the Mattermost webapp see interactive approval cards with timezone-aware timestamps
+
+### What Gets Posted
+
+| Event | Channel Post |
+|-------|--------------|
+| Request Created | "Approval Requested" with request details, awaiting approver |
+| Approved | "Approval Approved" with approver name and timestamp |
+| Denied | "Approval Denied" with reason if provided |
+| Canceled | "Approval Canceled" with cancellation reason |
+| Timed Out | "Approval Timed Out" indicating no response |
+
+### Fallback Behavior
+
+- **Playbooks not installed?** No problem - approvals work normally via DMs
+- **Not in a playbook channel?** Standard DM workflow applies
+- **API errors?** Circuit breaker prevents repeated failures; approval workflow continues
+- **Non-webapp clients?** Markdown table format displays all information
+
+### Example: Incident Response Approval
+
+```
+[In playbook channel #incident-prod-outage]
+
+You: /approve new
+[Modal: Approver: @oncall-lead, Details: "Deploy hotfix v2.1.1 to production"]
+
+[Channel shows: "⏳ Approval Requested" card with request details]
+
+@oncall-lead approves via DM
+
+[Channel updates to: "✅ Approval Approved" with timestamp]
+```
+
+This keeps your entire incident team informed without switching contexts.
 
 ## Usage Guide
 
@@ -313,7 +372,8 @@ A: The plugin uses an efficient indexing strategy for fast retrieval. It's desig
 
 1. **Download the release artifact**
    ```
-   wget https://github.com/ewwollesen/Mattermost-Plugin-Approver2/releases/download/v1.0.0/com.mattermost.plugin-approver2-1.0.0.tar.gz
+   # Download the latest release (replace version number as needed)
+   wget https://github.com/ewwollesen/Mattermost-Plugin-Approver2/releases/latest/download/com.mattermost.plugin-approver2.tar.gz
    ```
 
 2. **Upload via System Console**
@@ -343,19 +403,31 @@ Currently, the plugin works out-of-the-box with sensible defaults. Future versio
 
 ### Upgrading
 
-**From v0.x to v1.0.0:**
+**Upgrade process:**
 
 1. Review the [CHANGELOG](CHANGELOG.md) for new features
-2. Download the v1.0.0 release
+2. Download the latest release
 3. Upload via System Console (overwrites previous version)
 4. No data migration required - all existing approvals remain accessible
 5. New features activate immediately
 
-**Safe upgrade process:**
+**Safe upgrade tips:**
 
 - Back up your Mattermost database before major version upgrades
 - Test in a staging environment if available
 - Verify existing approvals are accessible after upgrade with `/approve list`
+
+### Version History
+
+| Version | Highlights |
+|---------|------------|
+| **v2.3.0** | DM notifications with interactive Approve/Deny buttons (Matterpoll pattern) |
+| **v2.2.0** | Webapp component framework with timezone-aware timestamps |
+| **v2.0.0** | Mattermost Playbooks integration with custom post types |
+| **v1.0.0** | Production-ready release with verification workflow, timeouts, autocomplete |
+| **v0.1.0** | Initial MVP with core approval functionality |
+
+See [CHANGELOG.md](CHANGELOG.md) for detailed release notes
 
 ## Development
 
@@ -369,7 +441,7 @@ cd Mattermost-Plugin-Approver2
 # Build plugin
 make
 
-# Run tests (443 passing tests)
+# Run tests
 make test
 
 # Deploy to local Mattermost
@@ -383,15 +455,28 @@ make deploy
 server/
   plugin.go              # Main plugin hooks and initialization
   configuration.go       # Configuration management
+  api.go                 # HTTP API handlers for button actions
   command/
-    router.go           # Command routing and handler logic
+    router.go            # Command routing and handler logic
   store/
-    store.go            # KV storage interface
-    approval.go         # Approval data model and operations
+    store.go             # KV storage interface
+    approval.go          # Approval data model and operations
+  notifications/
+    dm.go                # DM notification functions
+    interactive_post.go  # Matterpoll pattern for interactive buttons
+  playbooks/
+    client.go            # Playbooks API integration
+    formatters.go        # Status message formatting
+    circuit_breaker.go   # Reliability patterns
+    metrics.go           # Performance tracking
 webapp/
   src/
-    index.js            # Plugin entry point
-    components/         # React components for modals
+    index.tsx            # Plugin entry point and post type registration
+    components/
+      ApprovalPost.tsx       # Playbook channel approval cards
+      ApprovalDMPost.tsx     # DM notification components
+      Timestamp.tsx          # Timezone-aware timestamp display
+      StatusBadge.tsx        # Status indicator component
 ```
 
 ### Contributing

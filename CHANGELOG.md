@@ -10,6 +10,65 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Changed
 - Nothing yet
 
+## [2.3.0] - 2026-01-19
+
+**DM Notifications with Interactive Buttons**
+
+Implements the Matterpoll pattern for all DM notifications, providing interactive Approve/Deny buttons in the webapp with timezone-aware timestamps.
+
+### Added
+- **Interactive DM buttons** - Approve/Deny buttons directly in DM notifications using Matterpoll pattern
+- **ApprovalDMPost component** - Webapp component for rendering all DM notification types
+- **Five notification types** - approval_request, outcome, cancellation, timeout, verification
+- **Custom post type** - `custom_approval_dm` for DM notifications with full webapp support
+
+### Changed
+- **All DM notifications** - Converted to custom post type with interactive webapp rendering
+- **Verification notifications** - Now include timezone-aware timestamps and verification comments
+- **Outcome notifications** - Display decision details with proper timestamps
+
+### Technical
+- `CreateInteractiveApprovalPost()` helper for Matterpoll pattern
+- `FormatApprovalPropsForDM()` for consistent prop formatting
+- `FormatMarkdownFallback()` for non-webapp client support
+- 89+ server tests, 91 webapp tests
+
+## [2.2.0] - 2026-01-18
+
+**Webapp Component Framework & Timezone-Aware Posts**
+
+### Added
+- **Webapp infrastructure** - TypeScript/React framework for custom post types
+- **Timestamp component** - Timezone-aware timestamp display using moment-timezone
+- **ApprovalPost component** - Rich approval cards for playbook channels
+- **StatusBadge component** - Visual status indicators
+- **Custom post type registration** - `custom_approval` for playbook channel posts
+
+### Changed
+- **Playbook posts** - Now use custom webapp components instead of markdown-only
+- **Timestamps** - Display in user's local timezone (resolves GitHub Issue #3)
+
+### Fixed
+- **GitHub Issue #2** - Replaced Playbooks API with markdown tables for status updates
+
+## [2.0.0] - 2026-01-17
+
+**Mattermost Playbooks Integration**
+
+### Added
+- **Playbooks channel detection** - Automatic detection of playbook incident channels
+- **Status posts** - Approval status posted to playbook channel timeline
+- **Live updates** - Status posts update when approvals are decided/canceled
+- **Circuit breaker** - Graceful degradation when Playbooks is unavailable
+- **Metrics tracking** - Performance monitoring for Playbooks API calls
+- **Permission-aware** - Uses requester's context for proper access control
+
+### Technical
+- `server/playbooks/` package with client, formatters, circuit breaker, metrics
+- Markdown table formatting for status messages
+- 500ms API timeout for fast failure
+- Automatic token caching for Playbooks API authentication
+
 ## [1.0.0] - 2026-01-15
 
 🎉 **Production-Ready Release** - Feature Complete for 1.0!
@@ -108,6 +167,9 @@ Initial MVP release with complete approval workflow functionality.
 - **Minimum Go version**: 1.19+
 - **Breaking changes** will always be documented in the CHANGELOG with upgrade instructions
 
-[Unreleased]: https://github.com/mattermost/mattermost-plugin-approver2/compare/v1.0.0...HEAD
-[1.0.0]: https://github.com/mattermost/mattermost-plugin-approver2/releases/tag/v1.0.0
-[0.1.0]: https://github.com/mattermost/mattermost-plugin-approver2/releases/tag/v0.1.0
+[Unreleased]: https://github.com/ewwollesen/Mattermost-Plugin-Approver2/compare/v2.3.0...HEAD
+[2.3.0]: https://github.com/ewwollesen/Mattermost-Plugin-Approver2/releases/tag/v2.3.0
+[2.2.0]: https://github.com/ewwollesen/Mattermost-Plugin-Approver2/releases/tag/v2.2.0
+[2.0.0]: https://github.com/ewwollesen/Mattermost-Plugin-Approver2/releases/tag/v2.0.0
+[1.0.0]: https://github.com/ewwollesen/Mattermost-Plugin-Approver2/releases/tag/v1.0.0
+[0.1.0]: https://github.com/ewwollesen/Mattermost-Plugin-Approver2/releases/tag/v0.1.0
