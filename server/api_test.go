@@ -1508,16 +1508,21 @@ func TestHandleCancelModalSubmission_CapturesDetailsForAllReasons(t *testing.T) 
 }
 
 func TestDisableButtonsInDM(t *testing.T) {
-	t.Run("clears Props on approval decision", func(t *testing.T) {
+	// M1 Fix: Renamed from "clears Props" to "preserves approval data" to match actual behavior
+	t.Run("preserves approval data on approval decision", func(t *testing.T) {
 		api := &plugintest.API{}
 		plugin := &Plugin{}
 		plugin.SetAPI(api)
 
-		// Create original post with Props (buttons)
+		// Create original post with Props (buttons and existing approval data)
 		originalPost := &model.Post{
 			Id:      "post123",
 			Message: "## 🕐 **Approval Request**\n\nOriginal message",
 			Props: model.StringInterface{
+				"approval_code":      "A-TEST01",
+				"description":        "Test approval request",
+				"notification_type":  "approval_request",
+				"requester_username": "alice",
 				"attachments": []any{
 					map[string]any{
 						"actions": []any{
@@ -1531,16 +1536,30 @@ func TestDisableButtonsInDM(t *testing.T) {
 
 		api.On("GetPost", "post123").Return(originalPost, nil)
 
-		// Verify Props are cleared
+		// Story 10.4 Fix: Props now preserve approval data instead of clearing all
+		// M2 Fix: Verify existing props are preserved AND new decision props are set
 		api.On("UpdatePost", mock.MatchedBy(func(post *model.Post) bool {
+			_, hasAttachments := post.Props["attachments"]
+			status, hasStatus := post.Props["approval_status"].(string)
+			_, hasDecidedAt := post.Props["decided_at"]
+			notifType, hasNotifType := post.Props["notification_type"].(string)
+			// M2: Verify existing props are preserved
+			code, hasCode := post.Props["approval_code"].(string)
+			desc, hasDesc := post.Props["description"].(string)
 			return post.Id == "post123" &&
 				strings.Contains(post.Message, "✅ **Decision Recorded: Approved**") &&
-				len(post.Props) == 0 // Props should be completely cleared
+				!hasAttachments && // attachments should be removed
+				hasStatus && status == "approved" && // status should be set
+				hasDecidedAt && // decided_at should be set
+				hasNotifType && notifType == "outcome" && // H1: notification_type updated to "outcome"
+				hasCode && code == "A-TEST01" && // M2: existing props preserved
+				hasDesc && desc == "Test approval request" // M2: existing props preserved
 		})).Return(&model.Post{Id: "post123"}, nil)
 
 		record := &approval.ApprovalRecord{
 			ID:                 "record123",
 			NotificationPostID: "post123",
+			DecidedAt:          1705680000000,
 		}
 
 		err := plugin.disableButtonsInDM(record, "approved")
@@ -1548,16 +1567,19 @@ func TestDisableButtonsInDM(t *testing.T) {
 		api.AssertExpectations(t)
 	})
 
-	t.Run("clears Props on deny decision", func(t *testing.T) {
+	t.Run("preserves approval data on deny decision", func(t *testing.T) {
 		api := &plugintest.API{}
 		plugin := &Plugin{}
 		plugin.SetAPI(api)
 
-		// Create original post with Props (buttons)
+		// Create original post with Props (buttons and existing approval data)
 		originalPost := &model.Post{
 			Id:      "post123",
 			Message: "## 🕐 **Approval Request**\n\nOriginal message",
 			Props: model.StringInterface{
+				"approval_code":      "A-TEST02",
+				"notification_type":  "approval_request",
+				"requester_username": "bob",
 				"attachments": []any{
 					map[string]any{
 						"actions": []any{
@@ -1571,16 +1593,27 @@ func TestDisableButtonsInDM(t *testing.T) {
 
 		api.On("GetPost", "post123").Return(originalPost, nil)
 
-		// Verify Props are cleared and message updated for denial
+		// Story 10.4 Fix: Verify denial also preserves approval data and updates notification_type
 		api.On("UpdatePost", mock.MatchedBy(func(post *model.Post) bool {
+			_, hasAttachments := post.Props["attachments"]
+			status, hasStatus := post.Props["approval_status"].(string)
+			comment, hasComment := post.Props["decision_comment"].(string)
+			notifType, hasNotifType := post.Props["notification_type"].(string)
+			code, hasCode := post.Props["approval_code"].(string)
 			return post.Id == "post123" &&
 				strings.Contains(post.Message, "❌ **Decision Recorded: Denied**") &&
-				len(post.Props) == 0 // Props should be completely cleared
+				!hasAttachments && // attachments should be removed
+				hasStatus && status == "denied" && // status should be set
+				hasComment && comment == "Reason for denial" && // comment should be preserved
+				hasNotifType && notifType == "outcome" && // H1: notification_type updated to "outcome"
+				hasCode && code == "A-TEST02" // M2: existing props preserved
 		})).Return(&model.Post{Id: "post123"}, nil)
 
 		record := &approval.ApprovalRecord{
 			ID:                 "record123",
 			NotificationPostID: "post123",
+			DecidedAt:          1705680000000,
+			DecisionComment:    "Reason for denial",
 		}
 
 		err := plugin.disableButtonsInDM(record, "denied")
@@ -1602,16 +1635,18 @@ func TestDisableButtonsInDM(t *testing.T) {
 
 		api.On("GetPost", "post123").Return(originalPost, nil)
 
-		// Should still work and set Props to empty
+		// Story 10.4 Fix: Should add approval data props even if original props were empty
 		api.On("UpdatePost", mock.MatchedBy(func(post *model.Post) bool {
+			status, hasStatus := post.Props["approval_status"].(string)
 			return post.Id == "post123" &&
 				strings.Contains(post.Message, "✅ **Decision Recorded: Approved**") &&
-				len(post.Props) == 0
+				hasStatus && status == "approved"
 		})).Return(&model.Post{Id: "post123"}, nil)
 
 		record := &approval.ApprovalRecord{
 			ID:                 "record123",
 			NotificationPostID: "post123",
+			DecidedAt:          1705680000000,
 		}
 
 		err := plugin.disableButtonsInDM(record, "approved")

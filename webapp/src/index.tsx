@@ -3,6 +3,7 @@
 // Version: 3.0.0
 
 import ApprovalPost from './components/ApprovalPost';
+import ApprovalDMPost from './components/ApprovalDMPost';
 
 // Webpack injected version
 declare const PLUGIN_VERSION: string;
@@ -47,13 +48,18 @@ export class ApproverPlugin {
                 return;
             }
 
-            // Register custom post type for approval messages
+            // Register custom post type for approval messages (playbook channel posts)
             registry.registerPostTypeComponent('custom_approval', ApprovalPost);
+
+            // Story 10.4: Register custom post type for DM notifications
+            registry.registerPostTypeComponent('custom_approval_dm', ApprovalDMPost);
 
             // Debug logging (verbose logs use console.debug)
             console.log(`Approver Plugin Webapp v${version} Initialized`);
             console.debug('Registered custom post type: custom_approval');
+            console.debug('Registered custom post type: custom_approval_dm');
             console.debug('ApprovalPost component registered for playbook approval posts');
+            console.debug('ApprovalDMPost component registered for DM approval notifications');
         } catch (error) {
             console.error('Approver Plugin: Failed to register custom post type', error);
             return;

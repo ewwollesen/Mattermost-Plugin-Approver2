@@ -34,6 +34,11 @@ func (p *Plugin) ServeHTTP(c *plugin.Context, w http.ResponseWriter, r *http.Req
 	// Story 8.6 AC8: Health check endpoint for playbook integration status
 	apiRouter.HandleFunc("/health/playbooks", p.handlePlaybooksHealth).Methods(http.MethodGet)
 
+	// Story 10.2: Matterpoll pattern routes for interactive button clicks
+	// These use URL path parameters (not Context maps) per Matterpoll pattern
+	apiRouter.HandleFunc("/approval/{code}/approve", p.handleApprovalApprove).Methods(http.MethodPost)
+	apiRouter.HandleFunc("/approval/{code}/deny", p.handleApprovalDeny).Methods(http.MethodPost)
+
 	router.ServeHTTP(w, r)
 }
 
@@ -462,6 +467,105 @@ func (p *Plugin) handleAction(w http.ResponseWriter, r *http.Request) {
 	p.writeActionSuccess(w)
 }
 
+// handleApprovalApprove handles approve button clicks using Matterpoll URL pattern
+// POST /plugins/com.mattermost.plugin-approver2/api/v1/approval/{code}/approve
+// Story 10.2: Extracts approval code from URL path (not Context map)
+func (p *Plugin) handleApprovalApprove(w http.ResponseWriter, r *http.Request) {
+	p.handleApprovalAction(w, r, "approve")
+}
+
+// handleApprovalDeny handles deny button clicks using Matterpoll URL pattern
+// POST /plugins/com.mattermost.plugin-approver2/api/v1/approval/{code}/deny
+// Story 10.2: Extracts approval code from URL path (not Context map)
+func (p *Plugin) handleApprovalDeny(w http.ResponseWriter, r *http.Request) {
+	p.handleApprovalAction(w, r, "deny")
+}
+
+// handleApprovalAction processes approve/deny button clicks using the Matterpoll pattern
+// Extracts approval code from URL path, validates, and opens confirmation modal
+func (p *Plugin) handleApprovalAction(w http.ResponseWriter, r *http.Request, action string) {
+	// Extract code from URL path using mux.Vars (Story 10.2 AC1)
+	vars := mux.Vars(r)
+	code := vars["code"]
+
+	// Validate code is not empty (AC4)
+	if code == "" {
+		p.API.LogError("Empty approval code in URL path")
+		p.writeActionError(w, "Invalid approval code")
+		return
+	}
+
+	// Decode PostActionIntegrationRequest from request body (AC1)
+	// Close body when done (M3: consistent with other handlers)
+	defer func() {
+		if closeErr := r.Body.Close(); closeErr != nil {
+			p.API.LogError("Failed to close request body", "error", closeErr.Error())
+		}
+	}()
+
+	var request model.PostActionIntegrationRequest
+	if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
+		p.API.LogError("Failed to decode action request", "error", err.Error())
+		p.writeActionError(w, "Invalid request")
+		return
+	}
+
+	// Extract user ID from request (AC1)
+	userID := request.UserId
+	if userID == "" {
+		p.API.LogError("Missing user ID in PostActionIntegrationRequest")
+		p.writeActionError(w, "Invalid request")
+		return
+	}
+
+	// Look up approval by code (AC3) - uses GetByCode, not GetApproval(ID)
+	record, err := p.store.GetByCode(code)
+	if err != nil {
+		p.API.LogError("Failed to get approval record by code",
+			"code", code,
+			"error", err.Error(),
+		)
+		p.writeActionError(w, "Approval not found")
+		return
+	}
+
+	// Validate user is the designated approver (AC3, AC4)
+	// M1: Use generic "Permission denied" to avoid information disclosure
+	if record.ApproverID != userID {
+		p.API.LogError("Unauthorized approval attempt via Matterpoll pattern",
+			"code", code,
+			"authenticated_user", userID,
+			"designated_approver", record.ApproverID,
+		)
+		p.writeActionError(w, "Permission denied")
+		return
+	}
+
+	// Validate status is pending (AC3, AC4)
+	if record.Status != approval.StatusPending {
+		p.API.LogWarn("Approval action attempted on non-pending approval",
+			"code", code,
+			"current_status", record.Status,
+		)
+		p.writeActionError(w, "This approval has already been decided")
+		return
+	}
+
+	// Open confirmation modal (AC3) - reuses existing function
+	if err := p.openConfirmationModal(request.TriggerId, record, action); err != nil {
+		p.API.LogError("Failed to open confirmation modal",
+			"code", code,
+			"action", action,
+			"error", err.Error(),
+		)
+		p.writeActionError(w, "Failed to open confirmation modal")
+		return
+	}
+
+	// Return success response (AC2)
+	p.writeActionSuccess(w)
+}
+
 // openConfirmationModal opens an interactive dialog for approval/denial confirmation
 func (p *Plugin) openConfirmationModal(triggerID string, record *approval.ApprovalRecord, action string) error {
 	// Determine modal title and confirmation text
@@ -683,7 +787,8 @@ func (p *Plugin) handleConfirmDecision(payload *model.SubmitDialogRequest) *mode
 	}
 
 	// Disable buttons in original DM notification (best effort)
-	if err := p.disableButtonsInDM(record, decision); err != nil {
+	// Story 10.4 Fix: Pass updatedRecord (has DecidedAt, DecisionComment) instead of record
+	if err := p.disableButtonsInDM(updatedRecord, decision); err != nil {
 		// Log warning but continue - decision already recorded
 		p.API.LogWarn("Failed to disable buttons in DM notification",
 			"approval_id", approvalID,
@@ -728,13 +833,24 @@ func (p *Plugin) disableButtonsInDM(record *approval.ApprovalRecord, decision st
 	// Update the message to show decision recorded
 	post.Message = fmt.Sprintf("%s **Decision Recorded: %s**\n\n%s", statusEmoji, statusText, post.Message)
 
-	// Remove action buttons by clearing all Props (Story 4.7: same approach as cancellation)
-	// WHY clear all Props instead of selective removal:
-	// - Avoids complex nested map manipulation (reduced from 9 lines to 3)
-	// - More maintainable and less error-prone than traversing attachments[0].actions
-	// - Consistent with cancellation workflow (server/notifications/dm.go:220)
-	// - No side effects: we only put action buttons in Props, so clearing all is safe
-	post.Props = model.StringInterface{}
+	// Story 10.4 Fix: Update props for webapp component instead of clearing all
+	// The webapp ApprovalDMPost component needs props to render the approval data
+	if post.Props == nil {
+		post.Props = model.StringInterface{}
+	}
+
+	// Update approval status for webapp component
+	post.Props["approval_status"] = decision // "approved" or "denied"
+	post.Props["decided_at"] = record.DecidedAt
+	// H1 Fix: Update notification_type so webapp renders outcome view instead of approval_request view
+	post.Props["notification_type"] = "outcome"
+	if record.DecisionComment != "" {
+		post.Props["decision_comment"] = record.DecisionComment
+	}
+
+	// Remove interactive buttons by clearing attachments
+	// This removes the Approve/Deny buttons while preserving approval data props
+	delete(post.Props, "attachments")
 
 	// Update the post
 	if _, appErr := p.API.UpdatePost(post); appErr != nil {

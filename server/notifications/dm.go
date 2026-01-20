@@ -13,6 +13,9 @@ import (
 // SendApprovalRequestDM sends a DM notification to the approver when a new approval request is created.
 // The message includes complete context: requester info, timestamp, description, and request ID.
 // Returns the post ID and error. Error returned if DM send fails (caller should log and handle gracefully).
+//
+// Story 10.3: Uses Matterpoll pattern with CreateInteractiveApprovalPost() for interactive buttons.
+// Button URLs use /api/v1/approval/{code}/approve|deny pattern (Story 10.2 handlers).
 func SendApprovalRequestDM(api plugin.API, botUserID string, record *approval.ApprovalRecord) (string, error) {
 	// Validate inputs
 	if botUserID == "" {
@@ -31,69 +34,18 @@ func SendApprovalRequestDM(api plugin.API, botUserID string, record *approval.Ap
 		return "", fmt.Errorf("failed to get DM channel for approver %s: %w", record.ApproverID, err)
 	}
 
-	// Format timestamp as YYYY-MM-DD HH:MM:SS UTC (AC2 requirement)
-	timestamp := time.UnixMilli(record.CreatedAt).UTC()
-	timestampStr := timestamp.Format("2006-01-02 15:04:05 MST")
-
-	// Construct DM message with exact format from AC2
-	message := fmt.Sprintf("📋 **Approval Request**\n\n"+
-		"**From:** @%s (%s)\n"+
-		"**Requested:** %s\n"+
-		"**Description:**\n%s\n\n"+
-		"**Request ID:** `%s`",
-		record.RequesterUsername,
-		record.RequesterDisplayName,
-		timestampStr,
-		record.Description,
-		record.Code)
-
-	// Story 8.4: Add playbook context if this is a playbook-linked approval (AC1, AC5)
-	playbookContext := formatPlaybookContext(api, record)
-	if playbookContext != "" {
-		message += playbookContext
+	// Story 10.3: Use Matterpoll pattern helper (Story 10.1 infrastructure)
+	// This uses model.ParseSlackAttachment() to preserve Integration URLs with custom post types
+	post := CreateInteractiveApprovalPost(botUserID, channelID, record, NotificationTypeApprovalRequest)
+	if post == nil {
+		return "", fmt.Errorf("failed to create interactive approval post")
 	}
 
-	// Standard post with interactive buttons (baseline - working)
-	// Note: Timestamps will show in UTC (not user timezone) for DM notifications
-	// Future: Story needed to implement timezone support for DM buttons
-	post := &model.Post{
-		UserId:    botUserID,
-		ChannelId: channelID,
-		Message:   message, // Markdown message
-		Props: model.StringInterface{
-			"attachments": []any{
-				map[string]any{
-					"actions": []any{
-						// Approve button (green/primary style)
-						map[string]any{
-							"name": "Approve",
-							"type": "button",
-							"integration": map[string]any{
-								"url": "/plugins/com.mattermost.plugin-approver2/action",
-								"context": map[string]any{
-									"approval_id": record.ID,
-									"action":      "approve",
-								},
-							},
-							"style": "primary",
-						},
-						// Deny button (red/danger style)
-						map[string]any{
-							"name": "Deny",
-							"type": "button",
-							"integration": map[string]any{
-								"url": "/plugins/com.mattermost.plugin-approver2/action",
-								"context": map[string]any{
-									"approval_id": record.ID,
-									"action":      "deny",
-								},
-							},
-							"style": "danger",
-						},
-					},
-				},
-			},
-		},
+	// Story 8.4: Add playbook context to markdown fallback if this is a playbook-linked approval
+	// The FormatMarkdownFallback doesn't include playbook context, so we append it here
+	playbookContext := formatPlaybookContext(api, record)
+	if playbookContext != "" {
+		post.Message += playbookContext
 	}
 
 	// Send DM via CreatePost (persistent message, not ephemeral)
@@ -107,6 +59,9 @@ func SendApprovalRequestDM(api plugin.API, botUserID string, record *approval.Ap
 
 // SendOutcomeNotificationDM sends a DM notification to the requester when their approval request is decided.
 // The message includes complete context: approver info, decision time, original request, decision comment, and status.
+//
+// Story 10.5: Uses Matterpoll pattern with CreateInteractiveApprovalPost() for custom webapp component rendering.
+// The webapp ApprovalDMPost component handles "outcome" notification type to display timestamps in user's timezone.
 //
 // IMPORTANT: This function implements graceful degradation (Architecture Decision 2.2). The caller MUST NOT
 // fail the approval decision recording if this notification fails. Decision integrity is non-negotiable.
@@ -125,55 +80,24 @@ func SendOutcomeNotificationDM(api plugin.API, botUserID string, record *approva
 		return "", fmt.Errorf("approval record ID is empty")
 	}
 
+	// Validate status - outcome notifications require approved or denied status
+	if record.Status != approval.StatusApproved && record.Status != approval.StatusDenied {
+		return "", fmt.Errorf("invalid status for outcome notification: %s", record.Status)
+	}
+
 	// Get or create DM channel between bot and requester
 	channelID, err := GetDMChannelID(api, botUserID, record.RequesterID)
 	if err != nil {
 		return "", fmt.Errorf("failed to get DM channel for requester %s: %w", record.RequesterID, err)
 	}
 
-	// Format decision timestamp as YYYY-MM-DD HH:MM:SS UTC
-	timestamp := time.UnixMilli(record.DecidedAt).UTC()
-	timestampStr := timestamp.Format("2006-01-02 15:04:05 MST")
-
-	// Determine header and status based on decision
-	var header, status string
-	switch record.Status {
-	case approval.StatusApproved:
-		header = "✅ **Approval Request Approved**"
-		status = "**Status:** You may proceed with this action."
-	case approval.StatusDenied:
-		header = "❌ **Approval Request Denied**"
-		status = "**Status:** This request has been denied."
-	default:
-		return "", fmt.Errorf("invalid status for outcome notification: %s", record.Status)
-	}
-
-	// Construct base message
-	message := fmt.Sprintf("%s\n\n"+
-		"**Approver:** @%s (%s)\n"+
-		"**Decision Time:** %s\n"+
-		"**Request ID:** `%s`\n\n"+
-		"**Original Request:**\n> %s",
-		header,
-		record.ApproverUsername,
-		record.ApproverDisplayName,
-		timestampStr,
-		record.Code,
-		record.Description)
-
-	// Add comment section if decision comment is present
-	if record.DecisionComment != "" {
-		message += fmt.Sprintf("\n\n**Comment:**\n%s", record.DecisionComment)
-	}
-
-	// Add status statement
-	message += fmt.Sprintf("\n\n%s", status)
-
-	// Create standard post
-	post := &model.Post{
-		UserId:    botUserID,
-		ChannelId: channelID,
-		Message:   message,
+	// Story 10.5: Use Matterpoll pattern helper (Story 10.1 infrastructure)
+	// Creates custom_approval_dm post with outcome notification type
+	// No buttons for outcome notifications (handled by CreateInteractiveApprovalPost)
+	// Markdown fallback in post.Message for non-webapp clients
+	post := CreateInteractiveApprovalPost(botUserID, channelID, record, NotificationTypeOutcome)
+	if post == nil {
+		return "", fmt.Errorf("failed to create interactive approval post")
 	}
 
 	// Send DM via CreatePost (persistent message, not ephemeral)
@@ -245,6 +169,13 @@ func UpdateApprovalPostForCancellation(api plugin.API, record *approval.Approval
 // SendCancellationNotificationDM sends a DM notification to the approver when a request is canceled.
 // The message includes complete context: reference code, requester, cancellation reason, and timestamp.
 //
+// Story 10.6: Uses Matterpoll pattern with CreateInteractiveApprovalPost() for custom webapp component rendering.
+// The webapp ApprovalDMPost component handles "cancellation" notification type to display timestamps in user's timezone.
+// No interactive buttons are rendered for cancellation notifications (read-only).
+//
+// Note: The canceledByUsername parameter is preserved for API compatibility but not used -
+// the cancellation message shows requester info from the record.
+//
 // IMPORTANT: This function implements graceful degradation (Architecture Decision 2.2). The caller MUST NOT
 // fail the cancellation operation if this notification fails. Cancellation integrity is non-negotiable.
 //
@@ -265,47 +196,20 @@ func SendCancellationNotificationDM(api plugin.API, botUserID string, record *ap
 		return "", fmt.Errorf("approver ID is empty")
 	}
 
-	// Get or create DM channel between bot and approver
+	// Get or create DM channel between bot and APPROVER (not requester)
 	channelID, err := GetDMChannelID(api, botUserID, record.ApproverID)
 	if err != nil {
 		return "", fmt.Errorf("failed to get DM channel for approver %s: %w", record.ApproverID, err)
 	}
 
-	// Format cancellation timestamp as "Jan 02, 2006 3:04 PM"
-	canceledAt := time.UnixMilli(record.CanceledAt).UTC()
-	canceledAtStr := canceledAt.Format("Jan 02, 2006 3:04 PM")
-
-	// Handle cancellation reason (may be empty)
-	canceledReason := record.CanceledReason
-	if canceledReason == "" {
-		canceledReason = "Not specified"
-	}
-
-	// Construct DM message (Story 7.3: include details if present)
-	message := fmt.Sprintf("🚫 **Approval Request Canceled**\n\n"+
-		"**Reference:** `%s`\n"+
-		"**Requester:** @%s\n"+
-		"**Reason:** %s",
-		record.Code,
-		record.RequesterUsername,
-		canceledReason,
-	)
-
-	// Add details if present (Story 7.3)
-	if record.CanceledDetails != "" {
-		message += fmt.Sprintf("\n**Details:** %s", record.CanceledDetails)
-	}
-
-	message += fmt.Sprintf("\n**Canceled:** %s\n\n"+
-		"The approval request you received has been canceled by the requester.",
-		canceledAtStr,
-	)
-
-	// Create standard post
-	post := &model.Post{
-		UserId:    botUserID,
-		ChannelId: channelID,
-		Message:   message,
+	// Story 10.6: Use Matterpoll pattern helper (Story 10.1 infrastructure)
+	// Creates custom_approval_dm post with cancellation notification type
+	// No buttons for cancellation notifications (handled by CreateInteractiveApprovalPost)
+	// Props include canceled_at, canceled_reason (FormatApprovalPropsForDM lines 176-181)
+	// Markdown fallback in post.Message for non-webapp clients
+	post := CreateInteractiveApprovalPost(botUserID, channelID, record, NotificationTypeCancellation)
+	if post == nil {
+		return "", fmt.Errorf("failed to create interactive approval post")
 	}
 
 	// Send DM via CreatePost (persistent message, not ephemeral)
@@ -319,6 +223,10 @@ func SendCancellationNotificationDM(api plugin.API, botUserID string, record *ap
 
 // SendTimeoutNotificationDM sends a DM notification to the requester when their approval request times out.
 // The message includes complete context: request details, approver info, timeout reason, and actionable guidance.
+//
+// Story 10.7: Uses Matterpoll pattern with CreateInteractiveApprovalPost() for custom webapp component rendering.
+// The webapp ApprovalDMPost component handles "timeout" notification type to display timestamps in user's timezone.
+// No interactive buttons are rendered for timeout notifications (read-only).
 //
 // IMPORTANT: This function implements graceful degradation (Architecture Decision 2.2). The caller MUST NOT
 // fail the auto-cancellation operation if this notification fails. Data integrity is non-negotiable.
@@ -346,23 +254,14 @@ func SendTimeoutNotificationDM(api plugin.API, botUserID string, record *approva
 		return "", fmt.Errorf("failed to get DM channel for requester %s: %w", record.RequesterID, err)
 	}
 
-	// Construct DM message per AC3 requirements
-	message := fmt.Sprintf("⏱️ **Approval Request Timed Out**\n\n"+
-		"**Request ID:** `%s`\n\n"+
-		"**Original Request:**\n> %s\n\n"+
-		"**Approver:** @%s (%s)\n\n"+
-		"**Reason:** No response within 30 minutes\n\n"+
-		"**Status:** This request has been automatically canceled. You may create a new request if still needed.",
-		record.Code,
-		record.Description,
-		record.ApproverUsername,
-		record.ApproverDisplayName)
-
-	// Create standard post
-	post := &model.Post{
-		UserId:    botUserID,
-		ChannelId: channelID,
-		Message:   message,
+	// Story 10.7: Use Matterpoll pattern helper (Story 10.1 infrastructure)
+	// Creates custom_approval_dm post with timeout notification type
+	// No buttons for timeout notifications (handled by CreateInteractiveApprovalPost)
+	// Props include created_at for timeout display (FormatApprovalPropsForDM)
+	// Markdown fallback in post.Message for non-webapp clients
+	post := CreateInteractiveApprovalPost(botUserID, channelID, record, NotificationTypeTimeout)
+	if post == nil {
+		return "", fmt.Errorf("failed to create interactive approval post")
 	}
 
 	// Send DM via CreatePost (persistent message, not ephemeral)
@@ -376,6 +275,12 @@ func SendTimeoutNotificationDM(api plugin.API, botUserID string, record *approva
 
 // SendRequesterCancellationNotificationDM sends a DM notification to the requestor when their approval request is canceled by an approver.
 // Epic 7: 1.0 Polish & UX Improvements, Story 7.1: Completes the feedback loop by notifying requestors of cancellation.
+//
+// Story 10.6: Uses Matterpoll pattern with CreateInteractiveApprovalPost() for custom webapp component rendering.
+// The webapp ApprovalDMPost component handles "requester_cancellation" notification type to display:
+// - Who canceled the request (approver info)
+// - Cancellation reason and timestamp in user's timezone
+// No interactive buttons are rendered for cancellation notifications (read-only).
 //
 // IMPORTANT: This function implements graceful degradation (Architecture Decision 2.2). The caller MUST NOT
 // fail the cancellation operation if this notification fails - it is best-effort only. The cancellation has
@@ -398,50 +303,23 @@ func SendRequesterCancellationNotificationDM(api plugin.API, botUserID string, r
 		return "", fmt.Errorf("requester ID is empty")
 	}
 
-	// Get or create DM channel with requestor
+	// Get or create DM channel with REQUESTER (not approver)
 	channelID, err := GetDMChannelID(api, botUserID, record.RequesterID)
 	if err != nil {
 		return "", fmt.Errorf("failed to get DM channel with requestor %s: %w", record.RequesterID, err)
 	}
 
-	// Format cancellation timestamp
-	cancelTime := time.UnixMilli(record.CanceledAt).UTC().Format("Jan 02, 2006 3:04 PM")
-
-	// Build notification message (requestor perspective, Story 7.3: include details if present)
-	message := fmt.Sprintf(`🚫 **Your Approval Request Was Canceled**
-
-**Request ID:** `+"`%s`"+`
-**Original Request:** %s
-**Approver:** @%s
-**Reason:** %s`,
-		record.Code,
-		record.Description,
-		record.ApproverUsername,
-		record.CanceledReason,
-	)
-
-	// Add details if present (Story 7.3)
-	if record.CanceledDetails != "" {
-		message += fmt.Sprintf(`
-**Details:** %s`, record.CanceledDetails)
+	// Story 10.6: Use Matterpoll pattern helper (Story 10.1 infrastructure)
+	// Creates custom_approval_dm post with requester_cancellation notification type
+	// No buttons for cancellation notifications (handled by CreateInteractiveApprovalPost)
+	// Props include canceled_at, canceled_reason (FormatApprovalPropsForDM)
+	// Markdown fallback in post.Message for non-webapp clients
+	post := CreateInteractiveApprovalPost(botUserID, channelID, record, NotificationTypeRequesterCancellation)
+	if post == nil {
+		return "", fmt.Errorf("failed to create interactive approval post")
 	}
 
-	message += fmt.Sprintf(`
-**Canceled:** %s
-
----
-
-The approver has canceled this approval request. You may submit a new request if needed.`,
-		cancelTime,
-	)
-
-	// Create standard post
-	post := &model.Post{
-		ChannelId: channelID,
-		UserId:    botUserID,
-		Message:   message,
-	}
-
+	// Send DM via CreatePost (persistent message, not ephemeral)
 	createdPost, appErr := api.CreatePost(post)
 	if appErr != nil {
 		return "", fmt.Errorf("failed to send cancellation notification to requestor %s: %w", record.RequesterID, appErr)
@@ -452,6 +330,10 @@ The approver has canceled this approval request. You may submit a new request if
 
 // SendVerificationNotificationDM sends a DM notification to the approver when the requester marks an approved request as verified.
 // Story 6.2: Notifies approver that the requester has confirmed completion of the approved action.
+//
+// Story 10.8: Uses Matterpoll pattern with CreateInteractiveApprovalPost() for custom webapp component rendering.
+// The webapp ApprovalDMPost component handles "verification" notification type to display timestamps in user's timezone.
+// No interactive buttons are rendered for verification notifications (read-only).
 //
 // IMPORTANT: This function implements graceful degradation (Architecture Decision 2.2). The caller MUST NOT
 // fail the verification operation if this notification fails - it is best-effort only. The notification is
@@ -474,38 +356,20 @@ func SendVerificationNotificationDM(api plugin.API, botUserID string, record *ap
 		return "", fmt.Errorf("approver ID is empty")
 	}
 
-	// Get or create DM channel between bot and approver
+	// Get or create DM channel between bot and APPROVER
 	channelID, err := GetDMChannelID(api, botUserID, record.ApproverID)
 	if err != nil {
 		return "", fmt.Errorf("failed to get DM channel for approver %s: %w", record.ApproverID, err)
 	}
 
-	// Format verification timestamp
-	timestamp := time.UnixMilli(record.VerifiedAt).UTC()
-	timestampStr := timestamp.Format("2006-01-02 15:04:05 MST")
-
-	// Construct DM message
-	message := fmt.Sprintf("✅ **Approval Request Verified**\n\n"+
-		"**Request ID:** `%s`\n\n"+
-		"**Original Request:**\n> %s\n\n"+
-		"**Requester:** @%s (%s)\n"+
-		"**Verified:** %s",
-		record.Code,
-		record.Description,
-		record.RequesterUsername,
-		record.RequesterDisplayName,
-		timestampStr)
-
-	// Add verification comment if provided
-	if record.VerificationComment != "" {
-		message += fmt.Sprintf("\n\n**Verification Note:**\n> %s", record.VerificationComment)
-	}
-
-	// Create standard post
-	post := &model.Post{
-		UserId:    botUserID,
-		ChannelId: channelID,
-		Message:   message,
+	// Story 10.8: Use Matterpoll pattern helper (Story 10.1 infrastructure)
+	// Creates custom_approval_dm post with verification notification type
+	// No buttons for verification notifications (handled by CreateInteractiveApprovalPost)
+	// Props include verified_at, verification_comment (FormatApprovalPropsForDM lines 186-191)
+	// Markdown fallback in post.Message for non-webapp clients
+	post := CreateInteractiveApprovalPost(botUserID, channelID, record, NotificationTypeVerification)
+	if post == nil {
+		return "", fmt.Errorf("failed to create interactive approval post")
 	}
 
 	// Send DM via CreatePost (persistent message, not ephemeral)

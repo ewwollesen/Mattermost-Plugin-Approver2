@@ -39,7 +39,9 @@ story_location: _bmad-output/implementation-artifacts
 
 development_status:
   # Epic 9: Webapp Component Framework & Timezone-Aware Posts (v3.0.0)
-  epic-9: in-progress
+  # Completed: Stories 9.1-9.9 (webapp infrastructure + playbook posts)
+  # Canceled: Stories 9.10-9.11 (DM notifications moved to Epic 10 with Matterpoll pattern)
+  epic-9: done
   9-1-webapp-infrastructure-setup: done
   9-2-plugin-manifest-webapp-registration: done
   9-3-hello-world-component-verification: done
@@ -49,6 +51,20 @@ development_status:
   9-7-register-custom-post-type: done
   9-8-server-side-post-type-updates-for-playbook-posts: done
   9-9-end-to-end-testing-and-validation: done
-  9-10-convert-dm-notifications-to-custom-post-type: ready-for-dev
-  9-11-end-to-end-dm-notification-validation: ready-for-dev
+  9-10-convert-dm-notifications-to-custom-post-type: canceled
+  9-11-end-to-end-dm-notification-validation: canceled
   epic-9-retrospective: optional
+
+  # Epic 10: DM Notifications with Interactive Buttons (v2.3.0)
+  # Uses Matterpoll pattern: ParseSlackAttachment + doPostAction for interactive buttons
+  epic-10: done
+  10-1-server-side-matterpoll-pattern-implementation: done
+  10-2-update-api-handlers-for-matterpoll-pattern: done
+  10-3-convert-approval-request-dm-to-matterpoll-pattern: done
+  10-4-webapp-component-for-dm-notifications: done
+  10-5-convert-outcome-notifications-to-matterpoll-pattern: done
+  10-6-convert-cancellation-notifications-to-matterpoll-pattern: done
+  10-7-convert-timeout-notifications-to-matterpoll-pattern: done
+  10-8-convert-verification-notifications-to-matterpoll-pattern: done
+  10-9-end-to-end-dm-flow-validation: done
+  epic-10-retrospective: optional

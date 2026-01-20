@@ -1,10 +1,13 @@
 # Epic 9: Webapp Component Framework & Timezone-Aware Posts
 
 **Version:** 3.0.0
-**Status:** Planned
+**Status:** Completed (Stories 9.1-9.9)
 **Priority:** Critical (User #1 Priority)
 **Created:** 2026-01-18
+**Completed:** 2026-01-19
 **Related Issues:** GitHub Issue #3
+
+> **Scope Adjustment:** Stories 9.10-9.11 (DM notification conversion) were **canceled** and moved to Epic 10. The dev agent discovered that implementing interactive buttons via the webapp framework required a different pattern (Matterpoll's `ParseSlackAttachment` + `doPostAction` approach). Epic 9's primary goal of improving Playbooks integration with timezone-aware posts was successfully achieved.
 
 ## Overview
 
@@ -50,15 +53,17 @@ Establish webapp infrastructure for the Approval Workflow Plugin to enable rich,
 
 ## Scope
 
-### In Scope (Phase 1 - This Epic)
+### In Scope (Completed - Stories 9.1-9.9)
 ✅ Webapp infrastructure setup (React, TypeScript, webpack)
 ✅ plugin.json updates for webapp registration
 ✅ Timezone-aware timestamp component
 ✅ Custom post type for approval messages
 ✅ Playbook channel post conversion (pending, approved, denied, canceled, timeout)
-✅ **DM notification conversion (ALL approval notifications)**
 ✅ Mattermost theme integration (no custom styling)
 ✅ Build and deployment pipeline
+
+### Canceled (Moved to Epic 10)
+❌ DM notification conversion (ALL approval notifications) - *Requires Matterpoll pattern for interactive buttons*
 
 ### Out of Scope (Future Epics)
 ❌ Collapsible sections (future enhancement)
@@ -85,11 +90,9 @@ Establish webapp infrastructure for the Approval Workflow Plugin to enable rich,
 - Update server-side to use custom post type for playbook channels
 - Ensure backward compatibility
 
-**Phase 4: DM Notification Conversion (Stories 9.10-9.11)**
-- Convert DM notifications to use custom post type
-- Update all notification functions in notifications/dm.go
-- Test all DM scenarios (approval request, outcome, cancellation, timeout, verification)
-- Validate timezone display across all notification types
+**Phase 4: DM Notification Conversion (Stories 9.10-9.11) - CANCELED**
+- ❌ Moved to Epic 10 - Requires Matterpoll pattern (`ParseSlackAttachment` + `doPostAction`)
+- See Epic 10 for improved DM UI implementation
 
 ## Technical Decisions
 
@@ -615,7 +618,9 @@ Props: map[string]interface{}{
 
 ---
 
-### Story 9.10: Convert DM Notifications to Custom Post Type
+### Story 9.10: Convert DM Notifications to Custom Post Type - ⛔ CANCELED
+
+> **CANCELED:** Moved to Epic 10. The dev agent discovered that implementing interactive buttons with custom post types requires the Matterpoll pattern (`model.ParseSlackAttachment` + `doPostAction`). Epic 10 will implement this properly.
 
 **As a** user
 **I want** all DM notifications to use webapp components with timezone-aware timestamps
@@ -694,7 +699,9 @@ Props: map[string]interface{}{
 
 ---
 
-### Story 9.11: End-to-End DM Notification Validation
+### Story 9.11: End-to-End DM Notification Validation - ⛔ CANCELED
+
+> **CANCELED:** Moved to Epic 10 along with Story 9.10. Will be validated as part of Epic 10 implementation.
 
 **As a** user
 **I want** all approval DM notifications to display with proper timezones
@@ -880,29 +887,31 @@ Props: map[string]interface{}{
 
 ## Success Criteria
 
-### Must Have (Epic Complete)
+### Must Have (Epic Complete) - ✅ ACHIEVED
 ✅ Webapp build pipeline functional
 ✅ Custom post type registered and working
 ✅ Timestamps display in user's local timezone
 ✅ Playbook channel posts use webapp components
-✅ **DM notifications use webapp components**
-✅ All approval statuses render correctly (playbook + DM)
+✅ All approval statuses render correctly (playbook posts)
 ✅ No breaking changes to existing functionality
 ✅ Markdown fallback works for non-webapp clients
+
+### Deferred to Epic 10
+❌ DM notifications use webapp components (requires Matterpoll pattern)
 
 ### Nice to Have (Future Enhancement)
 - Collapsible approval details
 - Mobile-optimized layout
 - Real-time updates without page refresh
 
-### Definition of Done
-- All 11 stories completed with acceptance criteria met
+### Definition of Done - ✅ ACHIEVED (Stories 9.1-9.9)
+- ~~All 11 stories completed~~ → Stories 9.1-9.9 completed; Stories 9.10-9.11 canceled (moved to Epic 10)
 - All unit tests pass
 - Integration tests pass
 - Manual testing complete with no critical bugs
 - Documentation updated (README, architecture docs)
 - Build and deployment process documented
-- Epic 9 tagged as v3.0.0
+- Epic 9 released as v2.2.0
 
 ## Documentation Requirements
 

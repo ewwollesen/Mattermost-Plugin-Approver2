@@ -20,6 +20,7 @@ const mockConsoleError = jest.spyOn(console, 'error').mockImplementation();
 // Now safe to import
 import {ApproverPlugin} from './index';
 import ApprovalPost from './components/ApprovalPost';
+import ApprovalDMPost from './components/ApprovalDMPost';
 
 describe('Plugin Registration', () => {
     let mockRegistry: any;
@@ -53,10 +54,15 @@ describe('Plugin Registration', () => {
             plugin.initialize(mockRegistry, mockStore);
 
             // Verify registerPostTypeComponent was called with correct arguments
-            expect(mockRegistry.registerPostTypeComponent).toHaveBeenCalledTimes(1);
+            // Story 10.4: Now registering both custom_approval and custom_approval_dm
+            expect(mockRegistry.registerPostTypeComponent).toHaveBeenCalledTimes(2);
             expect(mockRegistry.registerPostTypeComponent).toHaveBeenCalledWith(
                 'custom_approval',
                 ApprovalPost
+            );
+            expect(mockRegistry.registerPostTypeComponent).toHaveBeenCalledWith(
+                'custom_approval_dm',
+                ApprovalDMPost
             );
 
             // Verify success logging
@@ -64,6 +70,7 @@ describe('Plugin Registration', () => {
                 expect.stringContaining('Approver Plugin Webapp v3.0.0 Initialized')
             );
             expect(mockConsoleDebug).toHaveBeenCalledWith('Registered custom post type: custom_approval');
+            expect(mockConsoleDebug).toHaveBeenCalledWith('Registered custom post type: custom_approval_dm');
         });
 
         it('should return cleanup function', () => {

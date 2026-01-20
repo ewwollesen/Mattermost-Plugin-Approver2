@@ -15,3 +15,6 @@ export { default as InfoRow } from './InfoRow';
 
 // Story 9.4: Timestamp Component
 export { default as Timestamp } from './Timestamp';
+
+// Story 10.4: ApprovalDMPost Component for DM Notifications
+export { default as ApprovalDMPost } from './ApprovalDMPost';
