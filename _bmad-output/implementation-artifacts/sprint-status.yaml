@@ -1,4 +1,4 @@
-# generated: 2026-01-18
+# generated: 2026-01-22
 # project: Mattermost-Plugin-Approver2
 # tracking_system: file-system
 # story_location: {project-root}/_bmad-output/implementation-artifacts
@@ -32,7 +32,7 @@
 # - SM typically creates next story after previous one is 'done' to incorporate learnings
 # - Dev moves story to 'review', then runs code-review (fresh context, different LLM recommended)
 
-generated: 2026-01-18
+generated: 2026-01-22
 project: Mattermost-Plugin-Approver2
 tracking_system: file-system
 story_location: _bmad-output/implementation-artifacts
@@ -68,3 +68,15 @@ development_status:
   10-8-convert-verification-notifications-to-matterpoll-pattern: done
   10-9-end-to-end-dm-flow-validation: done
   epic-10-retrospective: optional
+
+  # Epic 11: React Modal Framework (v2.4.0)
+  # POC migration: Replace native OpenInteractiveDialog with React modal
+  # Zero new features - validates pattern before adding multi-approval
+  epic-11: in-progress
+  11-1-modal-infrastructure-and-trigger-mechanism: review
+  11-2-user-selector-component: backlog
+  11-3-approval-request-modal-component: backlog
+  11-4-api-endpoint-for-react-modal-submission: backlog
+  11-5-server-side-slash-command-integration: backlog
+  11-6-end-to-end-feature-parity-validation: backlog
+  epic-11-retrospective: optional

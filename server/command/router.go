@@ -166,7 +166,19 @@ func (r *Router) executeNew(args *model.CommandArgs) (*model.CommandResponse, er
 
 	callbackURL := fmt.Sprintf("%s/plugins/com.mattermost.plugin-approver2/dialog/submit", *siteURL)
 
-	// Define the dialog structure
+	// Story 11.1: Define the dialog structure
+	// NOTE: Story 11.5 will replace this with React modal trigger using:
+	//   post := &model.Post{
+	//       Type: "custom_approval_modal",
+	//       Props: map[string]interface{}{
+	//           "modal_type":   "approval_request",
+	//           "channel_id":   args.ChannelId,
+	//           "team_id":      args.TeamId,
+	//           "trigger_user": args.UserId,
+	//       },
+	//   }
+	//   r.api.SendEphemeralPost(args.UserId, post)
+	// For now, continue using native dialog until React modal is fully validated.
 	dialog := model.OpenDialogRequest{
 		TriggerId: args.TriggerId,
 		URL:       callbackURL,

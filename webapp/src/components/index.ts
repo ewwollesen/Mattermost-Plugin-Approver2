@@ -18,3 +18,7 @@ export { default as Timestamp } from './Timestamp';
 
 // Story 10.4: ApprovalDMPost Component for DM Notifications
 export { default as ApprovalDMPost } from './ApprovalDMPost';
+
+// Story 11.1: Modal Infrastructure Components
+export { default as Modal } from './Modal';
+export { default as ModalTriggerPost } from './ModalTriggerPost';

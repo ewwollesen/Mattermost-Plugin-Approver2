@@ -2,8 +2,11 @@
 // Plugin: Approval Workflow (Approver2)
 // Version: 3.0.0
 
+import React from 'react';
 import ApprovalPost from './components/ApprovalPost';
 import ApprovalDMPost from './components/ApprovalDMPost';
+import ModalTriggerPost from './components/ModalTriggerPost';
+import {ModalProvider} from './context/ModalContext';
 
 // Webpack injected version
 declare const PLUGIN_VERSION: string;
@@ -54,12 +57,28 @@ export class ApproverPlugin {
             // Story 10.4: Register custom post type for DM notifications
             registry.registerPostTypeComponent('custom_approval_dm', ApprovalDMPost);
 
+            // Story 11.1: Register custom post type for modal trigger
+            // This invisible component opens React modals when server sends ephemeral post
+            registry.registerPostTypeComponent('custom_approval_modal', ModalTriggerPost);
+
+            // Story 11.1: Register root component for ModalProvider if supported
+            // ModalProvider wraps the app to enable modal state management
+            if (typeof registry.registerRootComponent === 'function') {
+                const RootComponent: React.FC = () => <ModalProvider><div /></ModalProvider>;
+                registry.registerRootComponent(RootComponent);
+                console.debug('ModalProvider registered as root component');
+            } else {
+                console.debug('registerRootComponent not available - modal trigger may not work');
+            }
+
             // Debug logging (verbose logs use console.debug)
             console.log(`Approver Plugin Webapp v${version} Initialized`);
             console.debug('Registered custom post type: custom_approval');
             console.debug('Registered custom post type: custom_approval_dm');
+            console.debug('Registered custom post type: custom_approval_modal');
             console.debug('ApprovalPost component registered for playbook approval posts');
             console.debug('ApprovalDMPost component registered for DM approval notifications');
+            console.debug('ModalTriggerPost component registered for modal triggers');
         } catch (error) {
             console.error('Approver Plugin: Failed to register custom post type', error);
             return;
