@@ -3,6 +3,7 @@ dist/
 webapp/src/manifest.ts
 webapp/node_modules/
 webapp/dist/
+webapp/coverage/
 server/manifest.go
 server/server
 server/plugin-approver2

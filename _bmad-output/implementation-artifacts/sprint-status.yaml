@@ -72,11 +72,14 @@ development_status:
   # Epic 11: React Modal Framework (v2.4.0)
   # POC migration: Replace native OpenInteractiveDialog with React modal
   # Zero new features - validates pattern before adding multi-approval
-  epic-11: in-progress
-  11-1-modal-infrastructure-and-trigger-mechanism: review
-  11-2-user-selector-component: backlog
-  11-3-approval-request-modal-component: backlog
-  11-4-api-endpoint-for-react-modal-submission: backlog
-  11-5-server-side-slash-command-integration: backlog
-  11-6-end-to-end-feature-parity-validation: backlog
+  # OUTCOME: Stories 11.1-11.4 completed - modal infrastructure built
+  # Stories 11.5-11.6 canceled - Mattermost doesn't render custom post types for ephemeral posts
+  # OpenInteractiveDialog retained for /approve new; React modal infrastructure available for future RHS/button triggers
+  epic-11: done
+  11-1-modal-infrastructure-and-trigger-mechanism: done
+  11-2-user-selector-component: done
+  11-3-approval-request-modal-component: done
+  11-4-api-endpoint-for-react-modal-submission: done
+  11-5-server-side-slash-command-integration: canceled
+  11-6-end-to-end-feature-parity-validation: canceled
   epic-11-retrospective: optional

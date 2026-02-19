@@ -211,9 +211,6 @@ describe('ModalTriggerPost Component (AC1)', () => {
 
     describe('Global event fallback (Issue 2 fix)', () => {
         it('uses global event dispatch when rendered outside ModalProvider', () => {
-            // Spy on console.debug to verify fallback is used
-            const consoleSpy = jest.spyOn(console, 'debug').mockImplementation();
-
             // Mock window event listener to capture dispatched event
             let capturedEvent: CustomEvent<{type: string; props: Record<string, any>}> | null = null;
             const eventListener = (e: Event) => {
@@ -221,27 +218,19 @@ describe('ModalTriggerPost Component (AC1)', () => {
             };
             window.addEventListener('approver-modal-open', eventListener);
 
-            // Render WITHOUT ModalProvider
+            // Render WITHOUT ModalProvider - should use global event fallback
             render(<ModalTriggerPost post={basePost} />);
 
-            // Verify fallback was used
-            expect(consoleSpy).toHaveBeenCalledWith(
-                'ModalTriggerPost: Using global event fallback (context not available)'
-            );
-
-            // Verify event was dispatched
+            // Verify event was dispatched via global fallback
             expect(capturedEvent).not.toBeNull();
             expect(capturedEvent!.detail.type).toBe('approval_request');
             expect(capturedEvent!.detail.props.channel_id).toBe('channel456');
 
             // Cleanup
             window.removeEventListener('approver-modal-open', eventListener);
-            consoleSpy.mockRestore();
         });
 
         it('prefers context over global events when ModalProvider is available', () => {
-            const consoleSpy = jest.spyOn(console, 'debug').mockImplementation();
-
             render(
                 <ModalProvider>
                     <ModalStateChecker />
@@ -249,15 +238,8 @@ describe('ModalTriggerPost Component (AC1)', () => {
                 </ModalProvider>
             );
 
-            // Should NOT log fallback message
-            expect(consoleSpy).not.toHaveBeenCalledWith(
-                'ModalTriggerPost: Using global event fallback (context not available)'
-            );
-
-            // Modal should still open via context
+            // Modal should open via context (not global events)
             expect(screen.getByTestId('modal-is-open').textContent).toBe('true');
-
-            consoleSpy.mockRestore();
         });
     });
 });

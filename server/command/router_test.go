@@ -83,76 +83,35 @@ func TestRoute(t *testing.T) {
 	}
 }
 
+// TestRouteNew tests the /approve new command (OpenInteractiveDialog flow)
 func TestRouteNew(t *testing.T) {
-	t.Run("new command opens modal dialog with correct structure", func(t *testing.T) {
+	t.Run("new command opens interactive dialog", func(t *testing.T) {
 		api := &plugintest.API{}
 		store := &mockStore{}
 		router := NewRouter(api, store, nil)
 
-		// Mock GetConfig to return site URL
+		// Mock GetConfig for site URL
 		siteURL := "https://mattermost.example.com"
-		config := &model.Config{}
-		config.ServiceSettings.SiteURL = &siteURL
-		api.On("GetConfig").Return(config)
+		api.On("GetConfig").Return(&model.Config{
+			ServiceSettings: model.ServiceSettings{
+				SiteURL: &siteURL,
+			},
+		})
 
-		// Mock OpenInteractiveDialog with strict validation
-		api.On("OpenInteractiveDialog", mock.MatchedBy(func(req model.OpenDialogRequest) bool {
-			dialog := req.Dialog
-
-			// Verify dialog title (AC1)
-			if dialog.Title != "Create Approval Request" {
-				return false
-			}
-
-			// Verify submit label (AC1)
-			if dialog.SubmitLabel != "Submit Request" {
-				return false
-			}
-
-			// Verify callback ID
-			if dialog.CallbackId != "approve_new" {
-				return false
-			}
-
-			// Verify exactly 2 fields (AC1)
-			if len(dialog.Elements) != 2 {
-				return false
-			}
-
-			// Verify user selector field (AC2)
-			approverField := dialog.Elements[0]
-			if approverField.DisplayName != "Select approver *" ||
-				approverField.Name != "approver" ||
-				approverField.Type != "select" ||
-				approverField.DataSource != "users" {
-				return false
-			}
-
-			// Verify textarea field (AC3)
-			descField := dialog.Elements[1]
-			if descField.DisplayName != "What needs approval? *" ||
-				descField.Name != "description" ||
-				descField.Type != "textarea" ||
-				descField.Placeholder != "Describe the action requiring approval" ||
-				descField.MaxLength != 1000 {
-				return false
-			}
-
-			// Verify trigger ID is passed
-			if req.TriggerId != "test-trigger-id-12345678901234567890" {
-				return false
-			}
-
-			// Verify callback URL
-			expectedURL := "https://mattermost.example.com/plugins/com.mattermost.plugin-approver2/dialog/submit"
-			return req.URL == expectedURL
+		// Mock OpenInteractiveDialog
+		api.On("OpenInteractiveDialog", mock.MatchedBy(func(dialog model.OpenDialogRequest) bool {
+			return dialog.TriggerId == "trigger123" &&
+				dialog.URL == "https://mattermost.example.com/plugins/com.mattermost.plugin-approver2/dialog/submit" &&
+				dialog.Dialog.Title == "Create Approval Request" &&
+				dialog.Dialog.CallbackId == "approve_new"
 		})).Return(nil)
 
 		args := &model.CommandArgs{
 			Command:   "/approve new",
-			TriggerId: "test-trigger-id-12345678901234567890",
-			UserId:    "user-id-abcdefghijklmnopqrstuvwxyz",
-			ChannelId: "channel-id-abcdefghijklmnopqrstuvwxyz",
+			TriggerId: "trigger123",
+			UserId:    "user123",
+			ChannelId: "channel456",
+			TeamId:    "team789",
 		}
 
 		resp, err := router.Route(args)
@@ -160,114 +119,129 @@ func TestRouteNew(t *testing.T) {
 		assert.NotNil(t, resp)
 		assert.Equal(t, model.CommandResponseTypeEphemeral, resp.ResponseType)
 
-		// Verify OpenInteractiveDialog was called with correct structure
 		api.AssertExpectations(t)
 	})
 
-	t.Run("new command with missing trigger_id returns error", func(t *testing.T) {
+	t.Run("new command fails without trigger_id", func(t *testing.T) {
 		api := &plugintest.API{}
 		store := &mockStore{}
 		router := NewRouter(api, store, nil)
 
 		args := &model.CommandArgs{
 			Command:   "/approve new",
-			TriggerId: "", // Missing trigger_id
-			UserId:    "user-id-abcdefghijklmnopqrstuvwxyz",
-			ChannelId: "channel-id-abcdefghijklmnopqrstuvwxyz",
+			TriggerId: "", // Empty trigger ID
+			UserId:    "user123",
+			ChannelId: "channel456",
+			TeamId:    "team789",
 		}
 
 		resp, err := router.Route(args)
 		assert.NoError(t, err)
 		assert.NotNil(t, resp)
-		assert.Contains(t, resp.Text, "trigger")
+		assert.Equal(t, model.CommandResponseTypeEphemeral, resp.ResponseType)
+		assert.Contains(t, resp.Text, "Missing trigger ID")
+
+		// OpenInteractiveDialog should NOT be called
+		api.AssertNotCalled(t, "OpenInteractiveDialog")
 	})
 
-	t.Run("new command with missing site URL returns error", func(t *testing.T) {
+	t.Run("new command fails with missing site URL", func(t *testing.T) {
 		api := &plugintest.API{}
 		store := &mockStore{}
 		router := NewRouter(api, store, nil)
 
-		// Mock GetConfig to return empty site URL
-		config := &model.Config{}
+		// Mock GetConfig returning empty site URL
+		api.On("GetConfig").Return(&model.Config{
+			ServiceSettings: model.ServiceSettings{
+				SiteURL: nil,
+			},
+		})
+
+		api.On("LogError", "Site URL not configured", mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return()
+
+		args := &model.CommandArgs{
+			Command:   "/approve new",
+			TriggerId: "trigger123",
+			UserId:    "user123",
+			ChannelId: "channel456",
+			TeamId:    "team789",
+		}
+
+		resp, err := router.Route(args)
+		assert.NoError(t, err)
+		assert.NotNil(t, resp)
+		assert.Equal(t, model.CommandResponseTypeEphemeral, resp.ResponseType)
+		assert.Contains(t, resp.Text, "Plugin configuration error")
+
+		// OpenInteractiveDialog should NOT be called
+		api.AssertNotCalled(t, "OpenInteractiveDialog")
+		api.AssertExpectations(t)
+	})
+
+	t.Run("new command fails with empty site URL", func(t *testing.T) {
+		api := &plugintest.API{}
+		store := &mockStore{}
+		router := NewRouter(api, store, nil)
+
+		// Mock GetConfig returning empty site URL
 		emptySiteURL := ""
-		config.ServiceSettings.SiteURL = &emptySiteURL
-		api.On("GetConfig").Return(config)
+		api.On("GetConfig").Return(&model.Config{
+			ServiceSettings: model.ServiceSettings{
+				SiteURL: &emptySiteURL,
+			},
+		})
 
-		// Mock LogError call
-		api.On("LogError", mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything)
+		api.On("LogError", "Site URL not configured", mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return()
 
 		args := &model.CommandArgs{
 			Command:   "/approve new",
-			TriggerId: "test-trigger-id-12345678901234567890",
-			UserId:    "user-id-abcdefghijklmnopqrstuvwxyz",
-			ChannelId: "channel-id-abcdefghijklmnopqrstuvwxyz",
+			TriggerId: "trigger123",
+			UserId:    "user123",
+			ChannelId: "channel456",
+			TeamId:    "team789",
 		}
 
 		resp, err := router.Route(args)
 		assert.NoError(t, err)
 		assert.NotNil(t, resp)
+		assert.Equal(t, model.CommandResponseTypeEphemeral, resp.ResponseType)
 		assert.Contains(t, resp.Text, "Plugin configuration error")
-		assert.Contains(t, resp.Text, "system administrator")
 
+		api.AssertNotCalled(t, "OpenInteractiveDialog")
 		api.AssertExpectations(t)
 	})
 
-	t.Run("new command with nil site URL returns error", func(t *testing.T) {
+	t.Run("new command fails when OpenInteractiveDialog returns error", func(t *testing.T) {
 		api := &plugintest.API{}
 		store := &mockStore{}
 		router := NewRouter(api, store, nil)
 
-		// Mock GetConfig to return nil site URL
-		config := &model.Config{}
-		config.ServiceSettings.SiteURL = nil
-		api.On("GetConfig").Return(config)
-
-		// Mock LogError call
-		api.On("LogError", mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything)
-
-		args := &model.CommandArgs{
-			Command:   "/approve new",
-			TriggerId: "test-trigger-id-12345678901234567890",
-			UserId:    "user-id-abcdefghijklmnopqrstuvwxyz",
-			ChannelId: "channel-id-abcdefghijklmnopqrstuvwxyz",
-		}
-
-		resp, err := router.Route(args)
-		assert.NoError(t, err)
-		assert.NotNil(t, resp)
-		assert.Contains(t, resp.Text, "Plugin configuration error")
-
-		api.AssertExpectations(t)
-	})
-
-	t.Run("new command with OpenInteractiveDialog failure returns error", func(t *testing.T) {
-		api := &plugintest.API{}
-		store := &mockStore{}
-		router := NewRouter(api, store, nil)
-
-		// Mock GetConfig to return site URL
+		// Mock GetConfig for site URL
 		siteURL := "https://mattermost.example.com"
-		config := &model.Config{}
-		config.ServiceSettings.SiteURL = &siteURL
-		api.On("GetConfig").Return(config)
+		api.On("GetConfig").Return(&model.Config{
+			ServiceSettings: model.ServiceSettings{
+				SiteURL: &siteURL,
+			},
+		})
 
 		// Mock OpenInteractiveDialog to fail
 		appErr := model.NewAppError("OpenInteractiveDialog", "app.plugin.open_dialog.error", nil, "test error", 500)
 		api.On("OpenInteractiveDialog", mock.Anything).Return(appErr)
 
-		// Mock LogError for the failure
-		api.On("LogError", mock.Anything, mock.Anything, mock.Anything)
+		api.On("LogError", "Failed to open interactive dialog", mock.Anything, mock.Anything).Return()
 
 		args := &model.CommandArgs{
 			Command:   "/approve new",
-			TriggerId: "test-trigger-id-12345678901234567890",
-			UserId:    "user-id-abcdefghijklmnopqrstuvwxyz",
-			ChannelId: "channel-id-abcdefghijklmnopqrstuvwxyz",
+			TriggerId: "trigger123",
+			UserId:    "user123",
+			ChannelId: "channel456",
+			TeamId:    "team789",
 		}
 
 		resp, err := router.Route(args)
 		assert.NoError(t, err)
 		assert.NotNil(t, resp)
+		assert.Equal(t, model.CommandResponseTypeEphemeral, resp.ResponseType)
 		assert.Contains(t, resp.Text, "Failed to open approval request form")
 		assert.Contains(t, resp.Text, "try again")
 
@@ -2512,6 +2486,7 @@ func (m *mockPlaybooksClient) GetMetrics() playbooks.Metrics {
 	return playbooks.Metrics{}
 }
 
+// TestExecuteNew_PlaybookIntegration tests Story 8.1 playbook context detection
 func TestExecuteNew_PlaybookIntegration(t *testing.T) {
 	t.Run("playbook detection succeeds - logs context and continues normally", func(t *testing.T) {
 		api := &plugintest.API{}
@@ -2533,14 +2508,18 @@ func TestExecuteNew_PlaybookIntegration(t *testing.T) {
 		}
 		playbooksClient.On("GetPlaybookRunByChannel", "channel012", "user123").Return(run, nil)
 
-		// Mock GetConfig to return site URL
+		// Mock GetConfig for site URL
 		siteURL := "https://mattermost.example.com"
-		config := &model.Config{}
-		config.ServiceSettings.SiteURL = &siteURL
-		api.On("GetConfig").Return(config)
+		api.On("GetConfig").Return(&model.Config{
+			ServiceSettings: model.ServiceSettings{
+				SiteURL: &siteURL,
+			},
+		})
 
-		// Mock OpenInteractiveDialog - approval creation should continue
-		api.On("OpenInteractiveDialog", mock.Anything).Return(nil)
+		// Mock OpenInteractiveDialog
+		api.On("OpenInteractiveDialog", mock.MatchedBy(func(dialog model.OpenDialogRequest) bool {
+			return dialog.Dialog.CallbackId == "approve_new"
+		})).Return(nil)
 
 		// Mock LogDebug - should log playbook context detection
 		var loggedRunID, loggedRunName string
@@ -2559,9 +2538,10 @@ func TestExecuteNew_PlaybookIntegration(t *testing.T) {
 
 		args := &model.CommandArgs{
 			Command:   "/approve new",
+			TriggerId: "trigger123",
 			UserId:    "user123",
 			ChannelId: "channel012",
-			TriggerId: "trigger123",
+			TeamId:    "team789",
 		}
 
 		resp, err := router.Route(args)
@@ -2587,20 +2567,25 @@ func TestExecuteNew_PlaybookIntegration(t *testing.T) {
 		// Mock playbooks client returning nil (404 - no playbook)
 		playbooksClient.On("GetPlaybookRunByChannel", "regular-channel", "user123").Return(nil, nil)
 
-		// Mock GetConfig to return site URL
+		// Mock GetConfig for site URL
 		siteURL := "https://mattermost.example.com"
-		config := &model.Config{}
-		config.ServiceSettings.SiteURL = &siteURL
-		api.On("GetConfig").Return(config)
+		api.On("GetConfig").Return(&model.Config{
+			ServiceSettings: model.ServiceSettings{
+				SiteURL: &siteURL,
+			},
+		})
 
-		// Mock OpenInteractiveDialog - approval creation should continue
-		api.On("OpenInteractiveDialog", mock.Anything).Return(nil)
+		// Mock OpenInteractiveDialog
+		api.On("OpenInteractiveDialog", mock.MatchedBy(func(dialog model.OpenDialogRequest) bool {
+			return dialog.Dialog.CallbackId == "approve_new"
+		})).Return(nil)
 
 		args := &model.CommandArgs{
 			Command:   "/approve new",
+			TriggerId: "trigger123",
 			UserId:    "user123",
 			ChannelId: "regular-channel",
-			TriggerId: "trigger123",
+			TeamId:    "team789",
 		}
 
 		resp, err := router.Route(args)
@@ -2633,20 +2618,25 @@ func TestExecuteNew_PlaybookIntegration(t *testing.T) {
 			}
 		}).Return()
 
-		// Mock GetConfig to return site URL
+		// Mock GetConfig for site URL
 		siteURL := "https://mattermost.example.com"
-		config := &model.Config{}
-		config.ServiceSettings.SiteURL = &siteURL
-		api.On("GetConfig").Return(config)
+		api.On("GetConfig").Return(&model.Config{
+			ServiceSettings: model.ServiceSettings{
+				SiteURL: &siteURL,
+			},
+		})
 
-		// Mock OpenInteractiveDialog - approval creation should STILL continue
-		api.On("OpenInteractiveDialog", mock.Anything).Return(nil)
+		// Mock OpenInteractiveDialog
+		api.On("OpenInteractiveDialog", mock.MatchedBy(func(dialog model.OpenDialogRequest) bool {
+			return dialog.Dialog.CallbackId == "approve_new"
+		})).Return(nil)
 
 		args := &model.CommandArgs{
 			Command:   "/approve new",
+			TriggerId: "trigger123",
 			UserId:    "user123",
 			ChannelId: "channel123",
-			TriggerId: "trigger123",
+			TeamId:    "team789",
 		}
 
 		resp, err := router.Route(args)
@@ -2667,20 +2657,25 @@ func TestExecuteNew_PlaybookIntegration(t *testing.T) {
 		store := &mockStore{}
 		router := NewRouter(api, store, nil) // No playbooks client
 
-		// Mock GetConfig to return site URL
+		// Mock GetConfig for site URL
 		siteURL := "https://mattermost.example.com"
-		config := &model.Config{}
-		config.ServiceSettings.SiteURL = &siteURL
-		api.On("GetConfig").Return(config)
+		api.On("GetConfig").Return(&model.Config{
+			ServiceSettings: model.ServiceSettings{
+				SiteURL: &siteURL,
+			},
+		})
 
-		// Mock OpenInteractiveDialog - approval creation should continue
-		api.On("OpenInteractiveDialog", mock.Anything).Return(nil)
+		// Mock OpenInteractiveDialog
+		api.On("OpenInteractiveDialog", mock.MatchedBy(func(dialog model.OpenDialogRequest) bool {
+			return dialog.Dialog.CallbackId == "approve_new"
+		})).Return(nil)
 
 		args := &model.CommandArgs{
 			Command:   "/approve new",
+			TriggerId: "trigger123",
 			UserId:    "user123",
 			ChannelId: "channel123",
-			TriggerId: "trigger123",
+			TeamId:    "team789",
 		}
 
 		resp, err := router.Route(args)

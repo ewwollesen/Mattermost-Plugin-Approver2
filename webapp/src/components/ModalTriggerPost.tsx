@@ -76,12 +76,14 @@ const ModalTriggerPost: React.FC<ModalTriggerPostProps> = ({post}) => {
         // Safely extract props
         const props = post?.props;
         if (!props) {
+            console.warn('ModalTriggerPost: No props in post');
             return;
         }
 
         // Extract modal_type
         const modalType = props.modal_type;
         if (!modalType || typeof modalType !== 'string') {
+            console.warn('ModalTriggerPost: Invalid modal_type', {modalType});
             return;
         }
 
@@ -96,7 +98,6 @@ const ModalTriggerPost: React.FC<ModalTriggerPostProps> = ({post}) => {
             context.openModal(modalType, modalProps);
         } else {
             // Fallback: dispatch global event for components outside React tree
-            console.debug('ModalTriggerPost: Using global event fallback (context not available)');
             dispatchModalOpen(modalType, modalProps);
         }
     }, [post, context]);

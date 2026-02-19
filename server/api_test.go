@@ -3,6 +3,8 @@ package main
 import (
 	"encoding/json"
 	"fmt"
+	"net/http"
+	"net/http/httptest"
 	"strings"
 	"testing"
 	"time"
@@ -2248,4 +2250,368 @@ func TestHandleApproveNew_SelfApprovalRejection(t *testing.T) {
 
 		api.AssertExpectations(t)
 	})
+}
+
+// Story 11.4: Tests for React modal API endpoint
+func TestHandleApprovalNew(t *testing.T) {
+	t.Run("successful approval creation returns 201 with approval data", func(t *testing.T) {
+		// Setup
+		api := &plugintest.API{}
+		plugin := &Plugin{}
+		plugin.SetAPI(api)
+		plugin.botUserID = "bot123"
+
+		// Mock user lookups
+		requester := &model.User{
+			Id:        "requester123",
+			Username:  "alice",
+			FirstName: "Alice",
+			LastName:  "Carter",
+		}
+		approver := &model.User{
+			Id:        "approver456",
+			Username:  "bob",
+			FirstName: "Bob",
+			LastName:  "Smith",
+		}
+
+		api.On("GetUser", "requester123").Return(requester, nil)
+		api.On("GetUser", "approver456").Return(approver, nil)
+
+		// Mock KV store operations
+		api.On("KVGet", mock.Anything).Return(nil, nil)
+		api.On("KVSet", mock.Anything, mock.Anything).Return(nil)
+
+		// Mock notifications
+		api.On("GetDirectChannel", "bot123", "approver456").Return(&model.Channel{Id: "dm_channel"}, nil)
+		api.On("CreatePost", mock.Anything).Return(&model.Post{}, nil)
+		api.On("SendEphemeralPost", "requester123", mock.Anything).Return(&model.Post{})
+
+		// Mock logging
+		api.On("LogInfo", mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything).Maybe()
+		api.On("LogDebug", mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything).Maybe()
+		api.On("LogWarn", mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything).Maybe()
+
+		// Create request
+		reqBody := `{"channel_id":"channel123","team_id":"team456","approver_id":"approver456","description":"Test approval request"}`
+		req := createTestRequest(t, "POST", "/api/v1/approval/new", reqBody)
+		req.Header.Set("Mattermost-User-ID", "requester123")
+
+		// Execute
+		rr := executeTestRequest(plugin, req)
+
+		// Verify
+		assert.Equal(t, 201, rr.Code)
+
+		var response ApprovalNewResponse
+		err := json.Unmarshal(rr.Body.Bytes(), &response)
+		assert.NoError(t, err)
+		assert.True(t, response.Success)
+		assert.NotNil(t, response.Approval)
+		assert.NotEmpty(t, response.Approval.Code)
+		assert.NotEmpty(t, response.Approval.ID)
+		assert.Equal(t, "pending", response.Approval.Status)
+		assert.Empty(t, response.Errors)
+		assert.Empty(t, response.Error)
+
+		api.AssertExpectations(t)
+	})
+
+	t.Run("missing approver_id returns 400 with field error", func(t *testing.T) {
+		plugin := &Plugin{}
+		api := &plugintest.API{}
+		plugin.SetAPI(api)
+
+		// No mocks needed - validation fails early
+
+		reqBody := `{"channel_id":"channel123","team_id":"team456","approver_id":"","description":"Test approval"}`
+		req := createTestRequest(t, "POST", "/api/v1/approval/new", reqBody)
+		req.Header.Set("Mattermost-User-ID", "requester123")
+
+		rr := executeTestRequest(plugin, req)
+
+		assert.Equal(t, 400, rr.Code)
+
+		var response ApprovalNewResponse
+		err := json.Unmarshal(rr.Body.Bytes(), &response)
+		assert.NoError(t, err)
+		assert.False(t, response.Success)
+		assert.Contains(t, response.Errors["approver_id"], "required")
+	})
+
+	t.Run("missing description returns 400 with field error", func(t *testing.T) {
+		plugin := &Plugin{}
+		api := &plugintest.API{}
+		plugin.SetAPI(api)
+
+		reqBody := `{"channel_id":"channel123","team_id":"team456","approver_id":"approver456","description":""}`
+		req := createTestRequest(t, "POST", "/api/v1/approval/new", reqBody)
+		req.Header.Set("Mattermost-User-ID", "requester123")
+
+		rr := executeTestRequest(plugin, req)
+
+		assert.Equal(t, 400, rr.Code)
+
+		var response ApprovalNewResponse
+		err := json.Unmarshal(rr.Body.Bytes(), &response)
+		assert.NoError(t, err)
+		assert.False(t, response.Success)
+		assert.Contains(t, response.Errors["description"], "required")
+	})
+
+	t.Run("whitespace-only description returns 400 with field error", func(t *testing.T) {
+		plugin := &Plugin{}
+		api := &plugintest.API{}
+		plugin.SetAPI(api)
+
+		reqBody := `{"channel_id":"channel123","team_id":"team456","approver_id":"approver456","description":"   "}`
+		req := createTestRequest(t, "POST", "/api/v1/approval/new", reqBody)
+		req.Header.Set("Mattermost-User-ID", "requester123")
+
+		rr := executeTestRequest(plugin, req)
+
+		assert.Equal(t, 400, rr.Code)
+
+		var response ApprovalNewResponse
+		err := json.Unmarshal(rr.Body.Bytes(), &response)
+		assert.NoError(t, err)
+		assert.False(t, response.Success)
+		assert.Contains(t, response.Errors["description"], "required")
+	})
+
+	t.Run("malformed JSON returns 400 with error", func(t *testing.T) {
+		plugin := &Plugin{}
+		api := &plugintest.API{}
+		plugin.SetAPI(api)
+
+		// Mock logging for parse error
+		api.On("LogError", mock.Anything, mock.Anything, mock.Anything).Maybe()
+
+		// Malformed JSON body
+		reqBody := `{malformed json`
+		req := createTestRequest(t, "POST", "/api/v1/approval/new", reqBody)
+		req.Header.Set("Mattermost-User-ID", "requester123")
+
+		rr := executeTestRequest(plugin, req)
+
+		assert.Equal(t, 400, rr.Code)
+
+		var response ApprovalNewResponse
+		err := json.Unmarshal(rr.Body.Bytes(), &response)
+		assert.NoError(t, err)
+		assert.False(t, response.Success)
+		assert.Contains(t, response.Error, "Invalid request")
+	})
+
+	t.Run("self-approval returns 400 with field error", func(t *testing.T) {
+		plugin := &Plugin{}
+		api := &plugintest.API{}
+		plugin.SetAPI(api)
+
+		// User tries to approve their own request
+		reqBody := `{"channel_id":"channel123","team_id":"team456","approver_id":"requester123","description":"Test approval"}`
+		req := createTestRequest(t, "POST", "/api/v1/approval/new", reqBody)
+		req.Header.Set("Mattermost-User-ID", "requester123")
+
+		rr := executeTestRequest(plugin, req)
+
+		assert.Equal(t, 400, rr.Code)
+
+		var response ApprovalNewResponse
+		err := json.Unmarshal(rr.Body.Bytes(), &response)
+		assert.NoError(t, err)
+		assert.False(t, response.Success)
+		assert.Contains(t, response.Errors["approver_id"], "cannot approve your own request")
+	})
+
+	t.Run("description over 1000 chars returns 400 with field error", func(t *testing.T) {
+		plugin := &Plugin{}
+		api := &plugintest.API{}
+		plugin.SetAPI(api)
+
+		// Mock logging for validation error
+		api.On("LogError", mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything).Maybe()
+
+		// Create description > 1000 chars
+		longDescription := strings.Repeat("a", 1001)
+		reqBody := fmt.Sprintf(`{"channel_id":"channel123","team_id":"team456","approver_id":"approver456","description":"%s"}`, longDescription)
+		req := createTestRequest(t, "POST", "/api/v1/approval/new", reqBody)
+		req.Header.Set("Mattermost-User-ID", "requester123")
+
+		rr := executeTestRequest(plugin, req)
+
+		assert.Equal(t, 400, rr.Code)
+
+		var response ApprovalNewResponse
+		err := json.Unmarshal(rr.Body.Bytes(), &response)
+		assert.NoError(t, err)
+		assert.False(t, response.Success)
+		assert.NotEmpty(t, response.Errors["description"])
+	})
+
+	t.Run("invalid approver (deleted user) returns 400 with field error", func(t *testing.T) {
+		plugin := &Plugin{}
+		api := &plugintest.API{}
+		plugin.SetAPI(api)
+
+		// Mock deleted/inactive user
+		api.On("GetUser", "deleted_user").Return(nil, model.NewAppError("GetUser", "app.user.missing.id", nil, "user not found", 404))
+
+		// Mock logging
+		api.On("LogError", mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything).Maybe()
+
+		reqBody := `{"channel_id":"channel123","team_id":"team456","approver_id":"deleted_user","description":"Test approval"}`
+		req := createTestRequest(t, "POST", "/api/v1/approval/new", reqBody)
+		req.Header.Set("Mattermost-User-ID", "requester123")
+
+		rr := executeTestRequest(plugin, req)
+
+		assert.Equal(t, 400, rr.Code)
+
+		var response ApprovalNewResponse
+		err := json.Unmarshal(rr.Body.Bytes(), &response)
+		assert.NoError(t, err)
+		assert.False(t, response.Success)
+		assert.NotEmpty(t, response.Errors["approver_id"])
+	})
+
+	t.Run("unauthorized request (no Mattermost-User-ID) returns 401", func(t *testing.T) {
+		plugin := &Plugin{}
+		api := &plugintest.API{}
+		plugin.SetAPI(api)
+
+		reqBody := `{"channel_id":"channel123","team_id":"team456","approver_id":"approver456","description":"Test"}`
+		req := createTestRequest(t, "POST", "/api/v1/approval/new", reqBody)
+		// No Mattermost-User-ID header set
+
+		rr := executeTestRequest(plugin, req)
+
+		// Auth middleware returns 401 before handler is reached
+		assert.Equal(t, 401, rr.Code)
+	})
+
+	t.Run("KV store error returns 500", func(t *testing.T) {
+		plugin := &Plugin{}
+		api := &plugintest.API{}
+		plugin.SetAPI(api)
+		plugin.botUserID = "bot123"
+
+		// Mock user lookups
+		requester := &model.User{
+			Id:        "requester123",
+			Username:  "alice",
+			FirstName: "Alice",
+			LastName:  "Carter",
+		}
+		approver := &model.User{
+			Id:        "approver456",
+			Username:  "bob",
+			FirstName: "Bob",
+			LastName:  "Smith",
+		}
+
+		api.On("GetUser", "requester123").Return(requester, nil)
+		api.On("GetUser", "approver456").Return(approver, nil)
+
+		// Mock KV store - Get succeeds but Set fails
+		api.On("KVGet", mock.Anything).Return(nil, nil)
+		api.On("KVSet", mock.Anything, mock.Anything).Return(model.NewAppError("KVSet", "app.kvstore.set_error", nil, "store error", 500))
+
+		// Mock logging
+		api.On("LogError", mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything).Maybe()
+
+		reqBody := `{"channel_id":"channel123","team_id":"team456","approver_id":"approver456","description":"Test approval"}`
+		req := createTestRequest(t, "POST", "/api/v1/approval/new", reqBody)
+		req.Header.Set("Mattermost-User-ID", "requester123")
+
+		rr := executeTestRequest(plugin, req)
+
+		assert.Equal(t, 500, rr.Code)
+
+		var response ApprovalNewResponse
+		err := json.Unmarshal(rr.Body.Bytes(), &response)
+		assert.NoError(t, err)
+		assert.False(t, response.Success)
+		assert.NotEmpty(t, response.Error)
+		assert.Contains(t, response.Error, "temporarily unavailable")
+	})
+
+	t.Run("existing dialog/submit endpoint still works", func(t *testing.T) {
+		// This test verifies backward compatibility (AC5)
+		api := &plugintest.API{}
+		plugin := &Plugin{}
+		plugin.SetAPI(api)
+		plugin.botUserID = "bot123"
+
+		// Mock user lookups
+		requester := &model.User{
+			Id:        "requester123",
+			Username:  "alice",
+			FirstName: "Alice",
+			LastName:  "Carter",
+		}
+		approver := &model.User{
+			Id:        "approver456",
+			Username:  "bob",
+			FirstName: "Bob",
+			LastName:  "Smith",
+		}
+
+		api.On("GetUser", "requester123").Return(requester, nil)
+		api.On("GetUser", "approver456").Return(approver, nil)
+
+		// Mock KV store operations
+		api.On("KVGet", mock.Anything).Return(nil, nil)
+		api.On("KVSet", mock.Anything, mock.Anything).Return(nil)
+
+		// Mock notifications
+		api.On("GetDirectChannel", "bot123", "approver456").Return(&model.Channel{Id: "dm_channel"}, nil)
+		api.On("CreatePost", mock.Anything).Return(&model.Post{}, nil)
+		api.On("SendEphemeralPost", "requester123", mock.Anything).Return(&model.Post{})
+
+		// Mock logging
+		api.On("LogInfo", mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything).Maybe()
+		api.On("LogDebug", mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything).Maybe()
+		api.On("LogWarn", mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything).Maybe()
+
+		// Create dialog submission payload (existing format)
+		payload := &model.SubmitDialogRequest{
+			UserId:     "requester123",
+			ChannelId:  "channel123",
+			TeamId:     "team789",
+			CallbackId: "approve_new",
+			Submission: map[string]any{
+				"approver":    "approver456",
+				"description": "Valid approval request via dialog",
+			},
+		}
+
+		// Execute via dialog handler (not HTTP route, but internal handler)
+		response := plugin.handleApproveNew(payload)
+
+		// Verify - should succeed
+		assert.NotNil(t, response)
+		assert.Empty(t, response.Error)
+		assert.Empty(t, response.Errors)
+
+		api.AssertExpectations(t)
+	})
+}
+
+// Helper function to create test HTTP request
+func createTestRequest(t *testing.T, method, path, body string) *http.Request {
+	t.Helper()
+	req, err := http.NewRequest(method, path, strings.NewReader(body))
+	if err != nil {
+		t.Fatalf("Failed to create request: %v", err)
+	}
+	req.Header.Set("Content-Type", "application/json")
+	return req
+}
+
+// Helper function to execute test request through plugin router
+func executeTestRequest(plugin *Plugin, req *http.Request) *httptest.ResponseRecorder {
+	rr := httptest.NewRecorder()
+	plugin.ServeHTTP(nil, rr, req)
+	return rr
 }

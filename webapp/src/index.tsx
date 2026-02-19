@@ -6,13 +6,65 @@ import React from 'react';
 import ApprovalPost from './components/ApprovalPost';
 import ApprovalDMPost from './components/ApprovalDMPost';
 import ModalTriggerPost from './components/ModalTriggerPost';
-import {ModalProvider} from './context/ModalContext';
+import ApprovalRequestModal from './components/ApprovalRequestModal';
+import {ModalProvider, useModal} from './context/ModalContext';
 
 // Webpack injected version
 declare const PLUGIN_VERSION: string;
 
 // Make this file a module
 export {};
+
+/**
+ * Modal types supported by the plugin
+ * Story 11.3: Add 'approval_request' modal type
+ */
+const MODAL_TYPES = {
+    APPROVAL_REQUEST: 'approval_request',
+} as const;
+
+/**
+ * ModalRenderer Component
+ * Story 11.3 - Task 8: Renders the appropriate modal based on context state
+ *
+ * This component listens to the ModalContext and renders the correct modal
+ * component based on the modalType. It must be inside ModalProvider.
+ */
+const ModalRenderer: React.FC = () => {
+    const {state, closeModal} = useModal();
+
+    if (!state.isOpen || !state.modalType) {
+        return null;
+    }
+
+    switch (state.modalType) {
+        case MODAL_TYPES.APPROVAL_REQUEST:
+            return (
+                <ApprovalRequestModal
+                    visible={true}
+                    onClose={closeModal}
+                    channelId={state.modalProps.channel_id || ''}
+                    teamId={state.modalProps.team_id || ''}
+                    currentUserId={state.modalProps.trigger_user || ''}
+                />
+            );
+        default:
+            console.warn(`Unknown modal type: ${state.modalType}`);
+            return null;
+    }
+};
+
+/**
+ * RootComponent wrapping ModalProvider and ModalRenderer
+ * This is registered as a root component to enable modal functionality
+ */
+const PluginRootComponent: React.FC = () => {
+    return (
+        <ModalProvider>
+            <ModalRenderer />
+        </ModalProvider>
+    );
+};
 
 // Mattermost Plugin Registry Interface
 interface PluginRegistry {
@@ -61,12 +113,11 @@ export class ApproverPlugin {
             // This invisible component opens React modals when server sends ephemeral post
             registry.registerPostTypeComponent('custom_approval_modal', ModalTriggerPost);
 
-            // Story 11.1: Register root component for ModalProvider if supported
-            // ModalProvider wraps the app to enable modal state management
+            // Story 11.1 & 11.3: Register root component for ModalProvider and ModalRenderer
+            // PluginRootComponent includes ModalProvider + ModalRenderer for full modal support
             if (typeof registry.registerRootComponent === 'function') {
-                const RootComponent: React.FC = () => <ModalProvider><div /></ModalProvider>;
-                registry.registerRootComponent(RootComponent);
-                console.debug('ModalProvider registered as root component');
+                registry.registerRootComponent(PluginRootComponent);
+                console.debug('PluginRootComponent registered (ModalProvider + ModalRenderer)');
             } else {
                 console.debug('registerRootComponent not available - modal trigger may not work');
             }

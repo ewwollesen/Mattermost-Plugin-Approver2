@@ -16,6 +16,30 @@ import (
 	"github.com/mattermost/mattermost/server/public/plugin"
 )
 
+// Story 11.4: Request/Response structs for React modal API endpoint
+// ApprovalNewRequest represents a request to create a new approval from React modal
+type ApprovalNewRequest struct {
+	ChannelID   string `json:"channel_id"`
+	TeamID      string `json:"team_id"`
+	ApproverID  string `json:"approver_id"`
+	Description string `json:"description"`
+}
+
+// ApprovalNewResponse represents the response from creating a new approval
+type ApprovalNewResponse struct {
+	Success  bool              `json:"success"`
+	Approval *ApprovalData     `json:"approval,omitempty"`
+	Errors   map[string]string `json:"errors,omitempty"`
+	Error    string            `json:"error,omitempty"`
+}
+
+// ApprovalData contains the essential approval record data returned on success
+type ApprovalData struct {
+	ID     string `json:"id"`
+	Code   string `json:"code"`
+	Status string `json:"status"`
+}
+
 // ServeHTTP demonstrates a plugin that handles HTTP requests by greeting the world.
 // The root URL is currently <siteUrl>/plugins/com.mattermost.plugin-starter-template/api/v1/. Replace com.mattermost.plugin-starter-template with the plugin ID.
 func (p *Plugin) ServeHTTP(c *plugin.Context, w http.ResponseWriter, r *http.Request) {
@@ -38,6 +62,9 @@ func (p *Plugin) ServeHTTP(c *plugin.Context, w http.ResponseWriter, r *http.Req
 	// These use URL path parameters (not Context maps) per Matterpoll pattern
 	apiRouter.HandleFunc("/approval/{code}/approve", p.handleApprovalApprove).Methods(http.MethodPost)
 	apiRouter.HandleFunc("/approval/{code}/deny", p.handleApprovalDeny).Methods(http.MethodPost)
+
+	// Story 11.4: React modal submission endpoint for creating new approvals
+	apiRouter.HandleFunc("/approval/new", p.handleApprovalNew).Methods(http.MethodPost)
 
 	router.ServeHTTP(w, r)
 }
@@ -1112,3 +1139,263 @@ func (p *Plugin) mapCancellationReason(code string) string {
 }
 
 // Story 9.8: formatPendingPlaybookStatusMessage removed - formatting now handled by playbooks.FormatPendingStatusMessage()
+
+// handleApprovalNew creates a new approval from React modal submission
+// POST /plugins/com.mattermost.plugin-approver2/api/v1/approval/new
+// Story 11.4: API endpoint for React modal form submission
+func (p *Plugin) handleApprovalNew(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "application/json")
+
+	// Get authenticated user from Mattermost-User-ID header (AC4)
+	requesterID := r.Header.Get("Mattermost-User-ID")
+	// Note: Auth middleware already validates this, but check for safety
+	if requesterID == "" {
+		w.WriteHeader(http.StatusUnauthorized)
+		_ = json.NewEncoder(w).Encode(ApprovalNewResponse{
+			Success: false,
+			Error:   "Not authorized",
+		})
+		return
+	}
+
+	// Parse request body with size limit to prevent DoS (AC1)
+	r.Body = http.MaxBytesReader(w, r.Body, 16*1024) // 16KB limit
+	defer func() {
+		if closeErr := r.Body.Close(); closeErr != nil {
+			p.API.LogError("Failed to close request body", "error", closeErr.Error())
+		}
+	}()
+
+	var req ApprovalNewRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		// Distinguish between body too large vs malformed JSON
+		errorMsg := "Invalid request format"
+		if err.Error() == "http: request body too large" {
+			errorMsg = "Request body too large (max 16KB)"
+			p.API.LogWarn("Approval request body too large", "error", err.Error())
+		} else {
+			p.API.LogError("Failed to parse approval request body", "error", err.Error())
+		}
+		w.WriteHeader(http.StatusBadRequest)
+		_ = json.NewEncoder(w).Encode(ApprovalNewResponse{
+			Success: false,
+			Error:   errorMsg,
+		})
+		return
+	}
+
+	// Layer 1: Field presence validation (AC2)
+	errors := make(map[string]string)
+
+	if req.ApproverID == "" {
+		errors["approver_id"] = "Approver field is required. Please select a user."
+	}
+
+	trimmedDescription := strings.TrimSpace(req.Description)
+	if trimmedDescription == "" {
+		errors["description"] = "Description field is required. Please describe what needs approval."
+	}
+
+	// Self-approval check (GitHub Issue #4, AC2)
+	if req.ApproverID != "" && req.ApproverID == requesterID {
+		errors["approver_id"] = "You cannot approve your own request. Please select a different approver."
+	}
+
+	// Return early if presence validation fails
+	if len(errors) > 0 {
+		w.WriteHeader(http.StatusBadRequest)
+		_ = json.NewEncoder(w).Encode(ApprovalNewResponse{
+			Success: false,
+			Errors:  errors,
+		})
+		return
+	}
+
+	// Layer 2: Business logic validation (AC2)
+
+	// Description length validation
+	if err := approval.ValidateDescription(trimmedDescription); err != nil {
+		p.API.LogError("Description validation failed", "error", err.Error(), "description_length", len(trimmedDescription))
+		w.WriteHeader(http.StatusBadRequest)
+		_ = json.NewEncoder(w).Encode(ApprovalNewResponse{
+			Success: false,
+			Errors:  map[string]string{"description": err.Error()},
+		})
+		return
+	}
+
+	// Approver validation - verify user exists and is active
+	approver, err := approval.ValidateApprover(req.ApproverID, p.API)
+	if err != nil {
+		p.API.LogError("Approver validation failed", "error", err.Error(), "approver_id", req.ApproverID)
+		w.WriteHeader(http.StatusBadRequest)
+		_ = json.NewEncoder(w).Encode(ApprovalNewResponse{
+			Success: false,
+			Errors:  map[string]string{"approver_id": err.Error()},
+		})
+		return
+	}
+
+	// Get requester info
+	requester, appErr := p.API.GetUser(requesterID)
+	if appErr != nil {
+		p.API.LogError("Failed to get requester user", "user_id", requesterID, "error", appErr.Error())
+		w.WriteHeader(http.StatusInternalServerError)
+		_ = json.NewEncoder(w).Encode(ApprovalNewResponse{
+			Success: false,
+			Error:   "Failed to retrieve requester information",
+		})
+		return
+	}
+
+	// Create KV store for code uniqueness checking
+	kvStore := store.NewKVStore(p.API)
+
+	// Create approval record with unique code (reuse existing logic from handleApproveNew)
+	record, err := approval.NewApprovalRecord(
+		kvStore,
+		requester.Id, requester.Username, requester.GetDisplayName(model.ShowFullName),
+		approver.Id, approver.Username, approver.GetDisplayName(model.ShowFullName),
+		trimmedDescription,
+		req.ChannelID,
+		req.TeamID,
+	)
+	if err != nil {
+		p.API.LogError("Failed to create approval record",
+			"error", err.Error(),
+			"requester_id", requester.Id,
+			"approver_id", approver.Id,
+		)
+		w.WriteHeader(http.StatusInternalServerError)
+		_ = json.NewEncoder(w).Encode(ApprovalNewResponse{
+			Success: false,
+			Error:   "Failed to generate unique approval code. Please try again.",
+		})
+		return
+	}
+
+	// Story 8.2: Detect and populate playbook context (if available)
+	if p.playbooksClient != nil {
+		run, pbErr := p.playbooksClient.GetPlaybookRunByChannel(req.ChannelID, requesterID)
+		if pbErr != nil {
+			errorMsg := pbErr.Error()
+			if !strings.Contains(errorMsg, "not found") && !strings.Contains(errorMsg, "404") {
+				p.API.LogWarn("Failed to detect playbook context during approval creation",
+					"channel_id", req.ChannelID,
+					"approval_id", record.ID,
+					"user_id", requesterID,
+					"error", errorMsg)
+			}
+		} else if run != nil {
+			record.PlaybookRunID = run.ID
+			record.PlaybookName = run.Name
+			record.PlaybookChannelID = run.ChannelID
+			p.API.LogDebug("Playbook context detected for approval",
+				"approval_id", record.ID,
+				"playbook_run_id", run.ID,
+				"playbook_name", run.Name)
+		}
+	}
+
+	// Save approval record to KV store (AC5)
+	err = kvStore.SaveApproval(record)
+	if err != nil {
+		p.API.LogError("Failed to save approval record to KV store",
+			"error", err.Error(),
+			"record_id", record.ID,
+			"code", record.Code,
+			"requester_id", requester.Id,
+			"approver_id", approver.Id,
+		)
+		w.WriteHeader(http.StatusInternalServerError)
+		_ = json.NewEncoder(w).Encode(ApprovalNewResponse{
+			Success: false,
+			Error:   "Failed to create approval request. The system is temporarily unavailable. Please try again.",
+		})
+		return
+	}
+
+	// Send DM notification to approver (best effort, graceful degradation)
+	postID, notifErr := notifications.SendApprovalRequestDM(p.API, p.botUserID, record)
+	if notifErr != nil {
+		errorType, suggestion := notifications.ClassifyDMError(notifErr)
+		p.API.LogWarn("DM notification failed but approval created",
+			"approval_id", record.ID,
+			"code", record.Code,
+			"approver_id", record.ApproverID,
+			"requester_id", record.RequesterID,
+			"error", notifErr.Error(),
+			"error_type", errorType,
+			"suggestion", suggestion,
+		)
+	} else {
+		record.NotificationSent = true
+		record.NotificationPostID = postID
+		if err := kvStore.SaveApproval(record); err != nil {
+			p.API.LogWarn("Failed to update notification tracking fields",
+				"approval_id", record.ID,
+				"code", record.Code,
+				"error", err.Error(),
+			)
+		}
+	}
+
+	// Post status to playbook channel if playbook-linked
+	if record.PlaybookRunID != "" && p.playbooksClient != nil {
+		postID, err := p.playbooksClient.PostMessageToPlaybookChannel(record.PlaybookChannelID, record)
+		if err != nil {
+			p.API.LogWarn("Failed to post status to playbook channel",
+				"approval_id", record.ID,
+				"code", record.Code,
+				"playbook_run_id", record.PlaybookRunID,
+				"error", err.Error())
+		} else {
+			record.PlaybookPostID = postID
+			if err := kvStore.SaveApproval(record); err != nil {
+				p.API.LogWarn("Failed to update PlaybookPostID in approval record",
+					"approval_id", record.ID,
+					"code", record.Code,
+					"post_id", postID,
+					"error", err.Error())
+			}
+		}
+	}
+
+	// Send ephemeral confirmation message to requester (skip in playbook channels)
+	if record.PlaybookRunID == "" {
+		confirmMsg := fmt.Sprintf("✅ **Approval Request Submitted**\n\n"+
+			"**Approver:** @%s (%s)\n"+
+			"**Request ID:** `%s`\n\n"+
+			"You will be notified when a decision is made.",
+			approver.Username, approver.GetDisplayName(model.ShowFullName),
+			record.Code)
+
+		post := &model.Post{
+			UserId:    "",
+			ChannelId: req.ChannelID,
+			Message:   confirmMsg,
+		}
+
+		ephemeralPost := p.API.SendEphemeralPost(requesterID, post)
+		if ephemeralPost == nil {
+			p.API.LogError("Failed to send ephemeral confirmation post", "user_id", requesterID, "record_id", record.ID, "code", record.Code)
+		}
+	}
+
+	p.API.LogInfo("Approval request created successfully via React modal",
+		"record_id", record.ID,
+		"code", record.Code,
+		"requester", requester.Username,
+		"approver", approver.Username)
+
+	// Return success response with approval data (AC3)
+	w.WriteHeader(http.StatusCreated)
+	_ = json.NewEncoder(w).Encode(ApprovalNewResponse{
+		Success: true,
+		Approval: &ApprovalData{
+			ID:     record.ID,
+			Code:   record.Code,
+			Status: record.Status,
+		},
+	})
+}

@@ -22,3 +22,15 @@ export { default as ApprovalDMPost } from './ApprovalDMPost';
 // Story 11.1: Modal Infrastructure Components
 export { default as Modal } from './Modal';
 export { default as ModalTriggerPost } from './ModalTriggerPost';
+
+// Story 11.2: User Selector Component
+export { default as UserSelector } from './UserSelector';
+export type { UserSelectorProps, UserOption } from './UserSelector';
+
+// Story 11.3: TextArea Component
+export { default as TextArea } from './TextArea';
+export type { TextAreaProps } from './TextArea';
+
+// Story 11.3: Approval Request Modal Component
+export { default as ApprovalRequestModal } from './ApprovalRequestModal';
+export type { ApprovalRequestModalProps } from './ApprovalRequestModal';
